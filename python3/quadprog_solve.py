@@ -9,16 +9,25 @@ def quadprog_solve(G, a, nconstraint, C, b):
     ###-------------------------------------###
     sol = (-1) * np.linalg.inv(G) * a  # Solution iterate 
 
-    Nstar = None
-    H = np.linalg.inv(G)
-
+    ## We only need to keep ahold of L^{-1} for the implementation. 
+    ## L is the triangular result of 
     L = np.linalg.cholesky(G)
     Linv = np.linalg.inv(L)
 
-    # indices of constraints being considered 
+    ##   Need to adopt the conventions used for directly computing
+    ## the values of ``z`` and ``r``, we need to hold onto 
+    ## the values of the factorization QR = B = L^{-1} N. 
+    Q = None
+    R = None
+    J1 = None
+    J2 = None
+
+    first_pass = True
+
+    ## indices of constraints being considered 
     active_set = np.array([], dtype=(np.dtype(int))) 
 
-    # number of considered constraints in active set
+    ## number of considered constraints in active set
     q = 0
 
     u = None
@@ -26,9 +35,8 @@ def quadprog_solve(G, a, nconstraint, C, b):
 
     k_dropped = None
 
-    z = None # Step direction in `primal' space
-    r = 0    # Step direction in `dual' space
-    
+    z = None ## Step direction in `primal' space
+    r = 0    ## Step direction in `dual' space
 
     ###-------------------------------------###
 
@@ -38,7 +46,7 @@ def quadprog_solve(G, a, nconstraint, C, b):
 
         if (np.any(ineq < 0)):
             # Choose a violated constraint not in active set.
-            #  This is the most naive way.
+            #  This is the most naive way, can be improved. 
             violated_constraints = np.ravel(np.where(ineq < 0))
             v = [x for x in violated_constraints if x not in active_set]
 
@@ -62,12 +70,18 @@ def quadprog_solve(G, a, nconstraint, C, b):
                 ineq = np.ravel((C.T * sol) - b) 
 
                 ###~~~~~~~~ Step 2(a) ~~~~~~~~###
-                # step direction in the primal space
-                z = H * n_p
+                ## Calculate step directions
+                if first_pass:
+                    z = np.linalg.inv(G) * n_p
+                    first_pass = False
+                else:
+                    # step direction in the primal space
+                    z = J2 * J2.T * n_p
 
-                if (q > 0):
-                    # negative of step direction in the dual space
-                    r = Nstar * n_p    # r will have num_rows = len(active_set)
+                    if (q > 0):
+                        # negative of step direction in the dual space
+                        # r will have num_rows = len(active_set)
+                        r = np.linalg.inv(R[0:q, 0:q]) * J1.T * n_p
 
                 ###~~~~~~~~ Step 2(b) ~~~~~~~~###
                 # partial step length t1 - max step in dual space
@@ -97,23 +111,14 @@ def quadprog_solve(G, a, nconstraint, C, b):
                 # current step length
                 t = np.min([t1, t2])
 
-                #print("\nconstraint", p)
-                #print("x = ", sol)
-                #print("ineq =", ineq)
-                #print("active set", active_set)
-                #print("u", u)
-                #print("lagr", lagr)
-                #print("z", z)
-                #print("r", r)
-                #print("t1", t1)
-                #print("t2", t2)
 
                 ###~~~~~~~~ Step 2(c) ~~~~~~~~###
                 if(t == np.inf):
                     print("infeasible! Stop here!")
                     FULL_STEP = True
                     DONE = True
-                    break
+                    return None
+                    #break
 
 
                 # If t2 is infinite, then we took a partial step in the dual space.
@@ -130,7 +135,7 @@ def quadprog_solve(G, a, nconstraint, C, b):
                     q = q - 1
 
                     # Update H and N*
-                    N = np.matrix(C[:,active_set]) #<-- TODO: MAKE THESE PERPENDICULAR
+                    N = np.matrix(C[:,active_set]) 
                     B = Linv * N
 
                     Q,R = np.linalg.qr(B, mode='complete')
@@ -140,9 +145,6 @@ def quadprog_solve(G, a, nconstraint, C, b):
                     J2 = Linv.T * Q2
 
                     Rsquare = R[0:q, 0:q]
-
-                    H = J2 * J2.T
-                    Nstar = np.linalg.inv(Rsquare) * J1.T
 
                     # go back to step 2(a)
                     continue
@@ -155,13 +157,13 @@ def quadprog_solve(G, a, nconstraint, C, b):
                 # if we took a full step
                 if (t == t2):
                     #print("full step")
-
+                    ## Add the constraint to the active set
                     active_set = np.hstack((active_set, p))
                     q = q + 1
                     u = lagr[-q:]
 
-                    # Update H and N*
-                    N = np.matrix(C[:,active_set]) #<-- TODO: MAKE THESE PERPENDICULAR
+                    # Update Q,R,J's,etc. 
+                    N = np.matrix(C[:,active_set]) 
                     B = Linv * N
 
                     Q,R = np.linalg.qr(B, mode='complete')
@@ -171,9 +173,6 @@ def quadprog_solve(G, a, nconstraint, C, b):
                     J2 = Linv.T * Q2
 
                     Rsquare = R[0:q, 0:q]
-
-                    H = J2 * J2.T
-                    Nstar = np.linalg.inv(Rsquare) * J1.T
 
                     # Exit current loop for Step 2, go back to Step 1
                     FULL_STEP = True
@@ -188,7 +187,7 @@ def quadprog_solve(G, a, nconstraint, C, b):
                     q = q - 1
 
                     # Update H and N*
-                    N = np.matrix(C[:,active_set]) #<-- TODO: MAKE THESE PERPENDICULAR
+                    N = np.matrix(C[:,active_set]) 
                     B = Linv * N
 
                     Q,R = np.linalg.qr(B, mode='complete')
@@ -197,26 +196,10 @@ def quadprog_solve(G, a, nconstraint, C, b):
                     J1 = Linv.T * Q1
                     J2 = Linv.T * Q2
 
-                    Rsquare = R[0:q, 0:q]
-
-                    H = J2 * J2.T
-                    Nstar = np.linalg.inv(Rsquare) * J1.T
-
                     # Go back to step 2(a)
                     continue
 
         else:
-            #print("\n\nDONE, finished with values:")
-            #print("\nconstraint", p)
-            #print("\nx = ", sol)
-            #print("ineq =", ineq)
-            #print("active set", active_set)
-            #print("u", u)
-            #print("lagr", lagr)
-            #print("z", z)
-            #print("r", r)
-            #print("t1", t1)
-            #print("t2", t2)
             DONE = True
 
     #print(ineq)
