@@ -1,5 +1,6 @@
 #!/usr/bin/python3
 import numpy as np
+from scipy.linalg import qr_insert, qr_delete
 
 ###-------------------------------------###
 def quadprog_solve(G, a, nconstraint, C, b):
@@ -33,7 +34,10 @@ def quadprog_solve(G, a, nconstraint, C, b):
     u = None
     lagr = None
 
+    # index out of all constraints which was dropped
     k_dropped = None
+    # index out of active constraints which was dropped
+    j_dropped = None
 
     z = None ## Step direction in `primal' space
     r = 0    ## Step direction in `dual' space
@@ -96,6 +100,7 @@ def quadprog_solve(G, a, nconstraint, C, b):
                         if (r[j] > 0) and (lagr[j] / r[j]) < t1:
                             t1 = lagr[j]/r[j]
                             k_dropped = k
+                            j_dropped = j
 
                     t1 = np.ravel(t1)[0]
 
@@ -139,12 +144,8 @@ def quadprog_solve(G, a, nconstraint, C, b):
                     B = Linv * N
 
                     Q,R = np.linalg.qr(B, mode='complete')
-                    Q1 = Q[:,[x for x in range(0, q)]]
-                    Q2 = Q[:,[x for x in range(q, Q.shape[1])]]
-                    J1 = Linv.T * Q1
-                    J2 = Linv.T * Q2
-
-                    Rsquare = R[0:q, 0:q]
+                    J1 = Linv.T * Q[:,[x for x in range(0, q)]]
+                    J2 = Linv.T * Q[:,[x for x in range(q, Q.shape[1])]]
 
                     # go back to step 2(a)
                     continue
@@ -162,17 +163,14 @@ def quadprog_solve(G, a, nconstraint, C, b):
                     q = q + 1
                     u = lagr[-q:]
 
-                    # Update Q,R,J's,etc. 
-                    N = np.matrix(C[:,active_set]) 
-                    B = Linv * N
-
-                    Q,R = np.linalg.qr(B, mode='complete')
-                    Q1 = Q[:,[x for x in range(0, q)]]
-                    Q2 = Q[:,[x for x in range(q, Q.shape[1])]]
-                    J1 = Linv.T * Q1
-                    J2 = Linv.T * Q2
-
-                    Rsquare = R[0:q, 0:q]
+                    if Q is None:
+                        Q,R = np.linalg.qr(Linv * n_p, mode="complete")
+                        J1 = Linv.T * Q[:,[x for x in range(0, q)]]
+                        J2 = Linv.T * Q[:,[x for x in range(q, Q.shape[1])]]
+                    else:
+                        Q,R = qr_insert(Q, R, (Linv * n_p) ,len(active_set)-1, 'col')
+                        J1 = Linv.T * Q[:,[x for x in range(0, q)]]
+                        J2 = Linv.T * Q[:,[x for x in range(q, Q.shape[1])]]
 
                     # Exit current loop for Step 2, go back to Step 1
                     FULL_STEP = True
@@ -191,10 +189,8 @@ def quadprog_solve(G, a, nconstraint, C, b):
                     B = Linv * N
 
                     Q,R = np.linalg.qr(B, mode='complete')
-                    Q1 = Q[:,[x for x in range(0, q)]]
-                    Q2 = Q[:,[x for x in range(q, Q.shape[1])]]
-                    J1 = Linv.T * Q1
-                    J2 = Linv.T * Q2
+                    J1 = Linv.T * Q[:,[x for x in range(0, q)]]
+                    J2 = Linv.T * Q[:,[x for x in range(q, Q.shape[1])]]
 
                     # Go back to step 2(a)
                     continue
@@ -227,3 +223,5 @@ if __name__ == "__main__":
 
     if (np.allclose(truth, est)):
         print("Test successful!")
+    else:
+        print("TEST FAIRED, F- FOH UU")
