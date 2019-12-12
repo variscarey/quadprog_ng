@@ -36,7 +36,7 @@ def quadprog_solve(G, a, nconstraint, C, b):
 
     # index out of all constraints which was dropped
     k_dropped = None
-    # index out of active constraints which was dropped
+    # index of active constraint which was dropped
     j_dropped = None
 
     z = None ## Step direction in `primal' space
@@ -139,11 +139,7 @@ def quadprog_solve(G, a, nconstraint, C, b):
 
                     q = q - 1
 
-                    # Update H and N*
-                    N = np.matrix(C[:,active_set]) 
-                    B = Linv * N
-
-                    Q,R = np.linalg.qr(B, mode='complete')
+                    Q,R = qr_delete(Q, R, j_dropped, 1, 'col')
                     J1 = Linv.T * Q[:,[x for x in range(0, q)]]
                     J2 = Linv.T * Q[:,[x for x in range(q, Q.shape[1])]]
 
@@ -184,11 +180,7 @@ def quadprog_solve(G, a, nconstraint, C, b):
                                            np.where(active_set == k_dropped))
                     q = q - 1
 
-                    # Update H and N*
-                    N = np.matrix(C[:,active_set]) 
-                    B = Linv * N
-
-                    Q,R = np.linalg.qr(B, mode='complete')
+                    Q,R = qr_delete(Q, R, j_dropped, 1, 'col')
                     J1 = Linv.T * Q[:,[x for x in range(0, q)]]
                     J2 = Linv.T * Q[:,[x for x in range(q, Q.shape[1])]]
 
