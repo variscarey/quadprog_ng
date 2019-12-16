@@ -217,4 +217,4 @@ if __name__ == "__main__":
     if (np.allclose(truth, est)):
         print("Test successful!")
     else:
-        print("TEST FAIRED, F- FOH UU")
+        print("test failed... whoops.")
