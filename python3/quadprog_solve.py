@@ -4,12 +4,21 @@ from scipy.linalg import qr_insert, qr_delete
 
 ###-------------------------------------###
 def quadprog_solve(quadr_coeff_G, linear_coeff_a, 
-                   n_ineq, ineq_coef_C, ineq_vec_b):
+                   n_ineq, ineq_coef_C, ineq_vec_d,
+                   m_eq, eq_coef_A, eq_vec_b):
     DONE = False
     FULL_STEP = False
 
+    if eq_coef_A is not None:
+        ADDING_EQ_CONSTRAINTS = True
+    else:
+        ADDING_EQ_CONSTRAINTS = False
+
+    first_pass = True
+
     ###-------------------------------------###
-    sol = (-1) * np.linalg.inv(quadr_coeff_G) * linear_coeff_a  # Solution iterate 
+    ## Solution iterate
+    sol = (-1) * np.linalg.inv(quadr_coeff_G) * linear_coeff_a   
 
     ## We only need to keep ahold of L^{-1} for the implementation. 
     ## L is the triangular result of 
@@ -24,10 +33,13 @@ def quadprog_solve(quadr_coeff_G, linear_coeff_a,
     J1 = None
     J2 = None
 
-    first_pass = True
-
     ## indices of constraints being considered 
     active_set = np.array([], dtype=(np.dtype(int))) 
+
+    ## normal vector of a given constraint
+    n_p = None
+    ## index of n_p in the choice of equality or inequality constraint
+    p = None
 
     ## number of considered constraints in active set
     q = 0
@@ -47,19 +59,29 @@ def quadprog_solve(quadr_coeff_G, linear_coeff_a,
 
     ###~~~~~~~~ Step 1 ~~~~~~~~###
     while not DONE:
-        ineq = np.ravel((ineq_coef_C.T * sol) - ineq_vec_b)
+        ineq = np.ravel((ineq_coef_C.T * sol) - ineq_vec_d)
 
-        if (np.any(ineq < 0)):
-            # Choose a violated constraint not in active set.
-            #  This is the most naive way, can be improved. 
-            violated_constraints = np.ravel(np.where(ineq < 0))
-            v = [x for x in violated_constraints if x not in active_set]
+        if ADDING_EQ_CONSTRAINTS:
+            eq_prb = np.ravel((eq_coef_A.T * sol) - eq_vec_b)
 
-            # Pick the first violated constraint.
-            p = v[0]
+        if (len(active_set) == m_eq):
+                    ADDING_EQ_CONSTRAINTS = False
 
-            # normal vector for each constraint, vector normal to the plane.
-            n_p = ineq_coef_C[:,p]
+        if (np.any(ineq < 0) or ADDING_EQ_CONSTRAINTS):
+            if (ADDING_EQ_CONSTRAINTS):
+                p = len(active_set)
+                n_p = eq_coef_A[:,p]
+            else:
+                # Choose a violated constraint not in active set.
+                #  This is the most naive way, can be improved. 
+                violated_constraints = np.ravel(np.where(ineq < 0))
+                v = [x for x in violated_constraints if x not in active_set]
+
+                # Pick the first violated constraint.
+                p = v[0]
+
+                # normal vector for each constraint, vector normal to the plane.
+                n_p = ineq_coef_C[:,p]
 
             if q == 0:
                 u = 0
@@ -72,7 +94,9 @@ def quadprog_solve(quadr_coeff_G, linear_coeff_a,
             while not FULL_STEP:
                 # algo as writ will cycle back here after taking a step
                 # in dual space, update inequality portion
-                ineq = np.ravel((ineq_coef_C.T * sol) - ineq_vec_b) 
+                ineq = np.ravel((ineq_coef_C.T * sol) - ineq_vec_d) 
+                if ADDING_EQ_CONSTRAINTS:
+                    eq_prb = np.ravel((eq_coef_A.T * sol) - eq_vec_b)
 
                 ###~~~~~~~~ Step 2(a) ~~~~~~~~###
                 ## Calculate step directions
@@ -90,18 +114,18 @@ def quadprog_solve(quadr_coeff_G, linear_coeff_a,
 
                 ###~~~~~~~~ Step 2(b) ~~~~~~~~###
                 # partial step length t1 - max step in dual space
-                if ((q == 0) or (r <= 0)):
+                if ((q == 0) or (r <= 0) or ADDING_EQ_CONSTRAINTS):
                     t1 = np.inf
                 else:
                     t1 = np.inf
                     k_dropped = None
 
-                    for j in range(0, len(active_set)):
+                    for j in range(m_eq, len(active_set)):
                         k = active_set[j]
                         if (r[j] > 0) and (lagr[j] / r[j]) < t1:
                             t1 = lagr[j]/r[j]
                             k_dropped = k
-                            j_dropped = j
+                            j_dropped = j + m_eq
 
                     t1 = np.ravel(t1)[0]
 
@@ -111,7 +135,11 @@ def quadprog_solve(quadr_coeff_G, linear_coeff_a,
                     # If no step in primal space
                     t2 = np.inf
                 else:
-                    t2 = (-1) * ineq[p] / (z.T * n_p)
+                    if ADDING_EQ_CONSTRAINTS:
+                        t2 = (-1) * eq_prb[p] / (z.T * n_p)
+                    else:
+                        t2 = (-1) * ineq[p] / (z.T * n_p)
+                    
                     t2 = np.ravel(t2)[0]
 
                 # current step length
@@ -135,8 +163,7 @@ def quadprog_solve(quadr_coeff_G, linear_coeff_a,
 
                     # Drop the constraint which minimized the step we took at that
                     # point.
-                    active_set = np.delete(active_set,
-                                           np.where(active_set == k_dropped))
+                    active_set = np.delete(active_set, j_dropped)
 
                     q = q - 1
 
@@ -177,8 +204,7 @@ def quadprog_solve(quadr_coeff_G, linear_coeff_a,
                 if (t == t1):
                     #print("partial step")
                     # Drop constraint k
-                    active_set = np.delete(active_set,
-                                           np.where(active_set == k_dropped))
+                    active_set = np.delete(active_set, j_dropped)
                     q = q - 1
 
                     Q,R = qr_delete(Q, R, j_dropped, 1, 'col')
@@ -197,24 +223,58 @@ def quadprog_solve(quadr_coeff_G, linear_coeff_a,
 
 
 if __name__ == "__main__":
+    ## Test 00
+    #### https://tinyurl.com/ux8x4dv
+    print("Running Test 00 :: https://tinyurl.com/ux8x4dv")
     nconstraint = 3
 
     G = np.matrix([[4, -2],
                    [-2, 4]])
 
+    a = np.matrix([[6], [0]])
+
     C = np.matrix([[1, 0, 1], 
                    [0, 1, 1]])
 
-    b = np.matrix([[0],[0],[2]])
+    d = np.matrix([[0],[0],[2]])
 
-    a = np.matrix([[6], [0]])
+    m_eq = 0
 
     truth = np.matrix([[0.5],
                        [1.5]])
 
-    est = quadprog_solve(G, a, nconstraint, C, b)
+    est = quadprog_solve(G, a, 
+                         nconstraint, C, d,
+                         m_eq, None, None)
 
     if (np.allclose(truth, est)):
-        print("Test successful!")
+        print("Test 00 successful!")
+    else:
+        print("test failed... whoops.")
+
+
+    ## Test 01
+    #### https://tinyurl.com/soytugm
+    print("Running Test 01 :: https://tinyurl.com/soytugm")
+    nconstraint = 2
+    C = np.matrix([[1, 0], 
+                   [0, 1]])
+    d = np.matrix([[1],[0]])
+
+    A = np.matrix([[1],
+                   [1]])
+    b = np.matrix([[6]])
+
+    m_eq = 1
+
+    truth = np.matrix([[5/2],
+                       [7/2]])
+
+    est = quadprog_solve(G, a,
+                         nconstraint, C, d,
+                         m_eq, A, b)
+
+    if (np.allclose(truth, est)):
+        print("Test 01 successful!")
     else:
         print("test failed... whoops.")
