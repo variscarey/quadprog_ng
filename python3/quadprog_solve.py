@@ -3,16 +3,17 @@ import numpy as np
 from scipy.linalg import qr_insert, qr_delete
 
 ###-------------------------------------###
-def quadprog_solve(G, a, nconstraint, C, b):
+def quadprog_solve(quadr_coeff_G, linear_coeff_a, 
+                   n_ineq, ineq_coef_C, ineq_vec_b):
     DONE = False
     FULL_STEP = False
 
     ###-------------------------------------###
-    sol = (-1) * np.linalg.inv(G) * a  # Solution iterate 
+    sol = (-1) * np.linalg.inv(quadr_coeff_G) * linear_coeff_a  # Solution iterate 
 
     ## We only need to keep ahold of L^{-1} for the implementation. 
     ## L is the triangular result of 
-    L = np.linalg.cholesky(G)
+    L = np.linalg.cholesky(quadr_coeff_G)
     Linv = np.linalg.inv(L)
 
     ##   Need to adopt the conventions used for directly computing
@@ -46,7 +47,7 @@ def quadprog_solve(G, a, nconstraint, C, b):
 
     ###~~~~~~~~ Step 1 ~~~~~~~~###
     while not DONE:
-        ineq = np.ravel((C.T * sol) - b)
+        ineq = np.ravel((ineq_coef_C.T * sol) - ineq_vec_b)
 
         if (np.any(ineq < 0)):
             # Choose a violated constraint not in active set.
@@ -58,7 +59,7 @@ def quadprog_solve(G, a, nconstraint, C, b):
             p = v[0]
 
             # normal vector for each constraint, vector normal to the plane.
-            n_p = C[:,p]
+            n_p = ineq_coef_C[:,p]
 
             if q == 0:
                 u = 0
@@ -71,12 +72,12 @@ def quadprog_solve(G, a, nconstraint, C, b):
             while not FULL_STEP:
                 # algo as writ will cycle back here after taking a step
                 # in dual space, update inequality portion
-                ineq = np.ravel((C.T * sol) - b) 
+                ineq = np.ravel((ineq_coef_C.T * sol) - ineq_vec_b) 
 
                 ###~~~~~~~~ Step 2(a) ~~~~~~~~###
                 ## Calculate step directions
                 if first_pass:
-                    z = np.linalg.inv(G) * n_p
+                    z = np.linalg.inv(quadr_coeff_G) * n_p
                     first_pass = False
                 else:
                     # step direction in the primal space
