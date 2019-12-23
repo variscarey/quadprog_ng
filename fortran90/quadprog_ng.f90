@@ -133,8 +133,8 @@ contains
         G_inv(irow, icol) = G_inv(irow,icol) + U_work(irow,icol)
       enddo
     enddo
-    
 
+    sol = (-1) * matmul(G_inv, linear_coeff_a)
 
     !!~~~ Begin Processing ~~~!!
     !! Solution iterate
