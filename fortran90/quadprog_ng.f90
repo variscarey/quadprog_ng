@@ -48,6 +48,9 @@ contains
     real(8), allocatable :: G_inv(:,:)
     real(8), allocatable :: U_work(:,:)
 
+    real(8), allocatable :: ineq_prb(:)
+    real(8), allocatable :: eq_prb(:)
+
     !! Cholesky decomp of quadr_coeff_G
     real(8), allocatable :: chol_L(:,:)
     real(8), allocatable :: inv_chol_L(:,:)
@@ -63,14 +66,14 @@ contains
 
     integer, allocatable :: active_set(:)
     integer, allocatable :: n_p(:)
-    integer :: p, &
-               q 
+    integer :: p = 0, &
+               q = 0 
 
     real(8), allocatable :: u(:)
     real(8), allocatable :: lagr(:)
 
-    integer :: k_dropped, &
-               j_dropped
+    integer :: k_dropped = 0, &
+               j_dropped = 0
 
     real(8), allocatable :: z(:), & 
                             r(:)
@@ -134,11 +137,55 @@ contains
       enddo
     enddo
 
-    sol = (-1) * matmul(G_inv, linear_coeff_a)
+    !! Allocate the other internals
+    allocate(n_p(nvars))
+    allocate(active_set(m_eq + n_ineq))
+    allocate(lagr(m_eq + n_ineq))
+    allocate(u(m_eq + n_ineq))
+
+    allocate(z(nvars))
+    allocate(r(nvars))
+
 
     !!~~~ Begin Processing ~~~!!
     !! Solution iterate
+    !! Start soln iterate at unconstrained minimum
+    sol = (-1) * matmul(G_inv, linear_coeff_a)
 
+    !! Main loop
+    do while (.not. DONE)
+      ineq_prb = matmul(transpose(ineq_coef_C),sol) - ineq_vec_d
+
+      if (ADDING_EQ_CONSTRAINTS) then
+        ineq_prb = matmul(transpose(ineq_coef_C),sol) - ineq_vec_d
+      endif
+
+      if (q .ge. m_eq) then
+        ADDING_EQ_CONSTRAINTS = .false. 
+      endif
+
+      if (any(ineq_prb < 0) .or. ADDING_EQ_CONSTRAINTS) then
+        if (ADDING_EQ_CONSTRAINTS) then
+          p = q
+          n_p = eq_coef_A(:,p)
+        else
+          do icol=1,n_ineq
+            if (ineq_prb(icol) .lt. 0) then
+              p = icol
+              break
+            endif
+          enddo
+          n_p = ineq_coef_C(:,p)
+      endif
+
+      if (q .eq. 0) then
+        u = 0
+      endif
+
+            
+    enddo 
+
+    return
 
   end subroutine solve_qp
 end module
@@ -146,4 +193,4 @@ end module
 
 program test
 
-end program test
+ 
