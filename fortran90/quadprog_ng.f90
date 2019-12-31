@@ -200,7 +200,13 @@ contains
 
         !!###~~~~~~~~ Step 2(a) ~~~~~~~~###
         !!## Calculate step directions
+        if (first_pass) then
+          z = matmul(G_inv, n_p)
+        else
+          z = matmul(matmul(J2, transpose(J2)), n_p)
 
+          !! TODO here
+        endif
 
       enddo
     enddo 
