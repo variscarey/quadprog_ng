@@ -69,7 +69,9 @@ contains
     integer :: p = 0, &
                q = 0 
 
+    !! lagrangian of 
     real(8), allocatable :: u(:)
+    !! lagrangian for each constraint in the active set
     real(8), allocatable :: lagr(:)
 
     integer :: k_dropped = 0, &
@@ -172,7 +174,7 @@ contains
           do icol=1,n_ineq
             if (ineq_prb(icol) .lt. 0) then
               p = icol
-              break
+              exit
             endif
           enddo
           n_p = ineq_coef_C(:,p)
@@ -182,7 +184,25 @@ contains
         u = 0
       endif
 
-            
+      lagr = 0
+      do irow=1,q
+        lagr(irow) = u(irow)
+      enddo
+
+      FULL_STEP = .false. 
+
+      do while (.not. FULL_STEP)
+        ineq_prb = matmul(transpose(ineq_coef_C),sol) - ineq_vec_d
+
+        if (ADDING_EQ_CONSTRAINTS) then
+          ineq_prb = matmul(transpose(ineq_coef_C),sol) - ineq_vec_d
+        endif
+
+        !!###~~~~~~~~ Step 2(a) ~~~~~~~~###
+        !!## Calculate step directions
+
+
+      enddo
     enddo 
 
     return
