@@ -43,7 +43,7 @@ contains
     logical first_pass = .TRUE. 
 
     integer status = 0
-    integer irow, icol = 1
+    integer irow, icol, iactive_set, icopy_idx = 1
 
     real(8), allocatable :: G_inv(:,:)
     real(8), allocatable :: U_work(:,:)
@@ -66,6 +66,7 @@ contains
 
     integer, allocatable :: active_set(:)
     integer, allocatable :: n_p(:)
+    integer, allocatable :: copy_integer(:)
     integer :: p = 0, &
                q = 0 
 
@@ -73,12 +74,17 @@ contains
     real(8), allocatable :: u(:)
     !! lagrangian for each constraint in the active set
     real(8), allocatable :: lagr(:)
+    real(8), allocatable :: copy_real(:)
 
     integer :: k_dropped = 0, &
-               j_dropped = 0
+               j_dropped = 0, &
+               k = 0
 
     real(8), allocatable :: z(:), & 
                             r(:)
+
+    real(8) :: t1, t2, t
+    real(8) :: MAX_DOUBLE = huge(t1)
 
     !!~~~ Allocations & Initializations ~~~!!
     if (m_eq .eq. 0) then
@@ -132,22 +138,28 @@ contains
     enddo
 
     !! Begin adding the lower and upper terms
-
     do icol=1,nvars
       do irow=1,nvars
         G_inv(irow, icol) = G_inv(irow,icol) + U_work(irow,icol)
       enddo
     enddo
 
+    !! Bounce the U_work matrix so we can re-use it later
+    deallocate(U_work)
+
     !! Allocate the other internals
     allocate(n_p(nvars))
-    allocate(active_set(m_eq + n_ineq))
+    allocate(active_set(m_eq + n_ineq))  
     allocate(lagr(m_eq + n_ineq))
     allocate(u(m_eq + n_ineq))
 
     allocate(z(nvars))
-    allocate(r(nvars))
+    allocate(r(m_eq + n_ineq))
 
+    allocate(copy_integer(m_eq + n_ineq))
+    copy_integer = 0
+    allocate(copy_real(m_eq + n_ineq))
+    copy_real = 0
 
     !!~~~ Begin Processing ~~~!!
     !! Solution iterate
@@ -155,6 +167,7 @@ contains
     sol = (-1) * matmul(G_inv, linear_coeff_a)
 
     !! Main loop
+    !! ###~~~~~~~~ Step 1 ~~~~~~~~###
     do while (.not. DONE)
       ineq_prb = matmul(transpose(ineq_coef_C),sol) - ineq_vec_d
 
@@ -191,6 +204,7 @@ contains
 
       FULL_STEP = .false. 
 
+      !!###~~~~~~~~ Step 2 ~~~~~~~~###      
       do while (.not. FULL_STEP)
         ineq_prb = matmul(transpose(ineq_coef_C),sol) - ineq_vec_d
 
@@ -202,10 +216,90 @@ contains
         !!## Calculate step directions
         if (first_pass) then
           z = matmul(G_inv, n_p)
+
+          first_pass = .false.
         else
           z = matmul(matmul(J2, transpose(J2)), n_p)
 
-          !! TODO here
+          if (q .gt. 0) then
+            r = matmul(matmul(R_inv(1:q,1:q), transpose(J1)), n_p)
+          endif
+        endif
+
+        !!###~~~~~~~~ Step 2(b) ~~~~~~~~###
+        !!# partial step length t1 - max step in dual space
+        if ((q .eq. 0) .or. (r .le. 0) .or. ADDING_EQ_CONSTRAINTS) then
+          t1 = MAX_DOUBLE 
+        else
+          t1 = MAX_DOUBLE
+          k_dropped = 0
+
+          do iactive_set=meq+1, q
+            k = active_set(iactive_set)
+            if ((r(iactive_set) .gt. 0) .and. ((lagr(iactive_set) / r(iactive_set)) .lt. t1)) then
+              t1 = lagr(iactive_set) / r(iactive_set)
+              k_dropped = k
+              j_dropped = iactive_set
+            endif
+          enddo
+        endif
+
+        !!# full step length t2 - min step in primal space
+        if (all(z .eq. 0)) then
+          t2 = MAX_DOUBLE
+        else
+          if (ADDING_EQ_CONSTRAINTS) then
+            t2 = (-1) * eq_prb(p) / (matmul(transpose(z), n_p))
+          else
+            t2 = (-1) * ineq_prb / (matmul(transpose(z), n_p))
+          endif
+        endif
+
+        !!# current step length
+        t = min(t1, t2)
+
+        !!###~~~~~~~~ Step 2(c) ~~~~~~~~###
+        if(t .eq. MAX_DOUBLE) then
+          print *, "infeasible! Stop here!"
+          FULL_STEP = .true.
+          DONE = .true.
+          ierr = 420
+          return
+        endif
+
+        !!# If t2 is infinite, then we took a partial step in the dual space.
+        if (t2 .eq. MAX_DOUBLE) then
+          !update lagrangian
+          r(q+1) = -1
+          lagr = lagr + (-1 * t * r)
+
+          !! remove dropped constraint
+          active_set(j_dropped) = 0
+          icopy_idx = 1
+          copy_integer = 0
+          do iactive_set=1,q+1
+            if (active_set(iactive_set) .gt 0) then
+              copy_integer(icopy_idx) = active_set(iactive_set)
+              icopy_idx = icopy_idx + 1
+            endif
+          enddo
+          active_set = copy_integer
+
+          q = q - 1
+
+          !!TODO:> ADD QR UPDATE
+          !# go back to step 2(a)
+          cycle
+        endif
+
+        sol = sol + t * z
+        r(q+1) = -1
+        lagr = lagr + (-1 * t * r)
+
+        !!# if we took a partial step
+        if (t .eq. t2) then
+          q = q+1
+          active_set(q) = p
         endif
 
       enddo
