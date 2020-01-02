@@ -58,6 +58,7 @@ contains
     !! QR factorization of B = L^{-1} N
     real(8), allocatable :: Q(:,:)
     real(8), allocatable :: R(:,:)
+    real(8), allocatable :: R_inv(:,:)
 
     !! J = L^{-T} Q, inverse transpose of L by columns of Q = [Q1 | Q2]
     !! Q1 has the columns corresponding to active constraints 
@@ -70,7 +71,7 @@ contains
     integer :: p = 0, &
                q = 0 
 
-    !! lagrangian of 
+    !! lagrangian, each step in dual space
     real(8), allocatable :: u(:)
     !! lagrangian for each constraint in the active set
     real(8), allocatable :: lagr(:)
@@ -80,11 +81,18 @@ contains
                j_dropped = 0, &
                k = 0
 
-    real(8), allocatable :: z(:), & 
-                            r(:)
+    real(8), allocatable :: z(:), &  ! Step direction in primal space
+                            r(:)     ! Step dir, dual space
 
     real(8) :: t1, t2, t
     real(8) :: MAX_DOUBLE = huge(t1)
+
+    !! intermediate matrices for doing the inversions
+    real(8), allocatable :: work(:)
+    integer, allocatable :: ipiv(:)
+
+    !! temps for holding 
+    integer, dimension(2) :: R_dim
 
     !!~~~ Allocations & Initializations ~~~!!
     if (m_eq .eq. 0) then
@@ -97,11 +105,11 @@ contains
       allocate(sol(nvars))
     endif
 
-    allocate(chol_L(nvars, nvars))
-    allocate(inv_chol_L(nvars, nvars))
-
     !! Begin chol factorization and use the factors to get
     !! the inverse of the matrix G
+
+    allocate(chol_L(nvars, nvars))
+    allocate(inv_chol_L(nvars, nvars))
 
     ! Lower triangular cholesky 
     call dpotrf('L', nvars, L, nvars, status)
@@ -136,6 +144,17 @@ contains
             endif
         enddo
     enddo
+
+    !! Now hold onto L inverse, use LU factorization on it
+    allocate(tau(nvars))
+    allocate(ipiv(nvars))
+
+    inv_chol_L = chol_L
+    call dgetrf(nvars,nvars,inv_chol_L,nvars,ipiv,info)
+    call dgetri(nvars,inv_chol_L,nvars,ipiv,work,nvars,info)
+
+    deallocate(ipiv)
+    deallocate(work)
 
     !! Begin adding the lower and upper terms
     do icol=1,nvars
@@ -222,7 +241,22 @@ contains
             z = matmul(matmul(J2, transpose(J2)), n_p)
 
             if (q .gt. 0) then
+              !TODO:> R_inv here!
+              R_dim = shape(R)
+              allocate(R_inv(R_dim(1), R_dim(2)))
+              allocate(tau(q))
+              allocate(ipiv(q))
+
+              R_inv = R
+              call dgetrf(nvars,nvars,inv_chol_L,nvars,ipiv,info)
+              call dgetri(nvars,inv_chol_L,nvars,ipiv,work,nvars,info)
+
+              deallocate(ipiv)
+              deallocate(work)
+
               r = matmul(matmul(R_inv(1:q,1:q), transpose(J1)), n_p)
+
+              deallocate(R_inv)
             endif
           endif
 
@@ -288,6 +322,8 @@ contains
             q = q - 1
 
             !TODO:> ADD QR UPDATE
+
+
             !# go back to step 2(a)
             cycle
           endif
@@ -348,4 +384,4 @@ end module
 
 program test
 
- 
+end program test
