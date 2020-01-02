@@ -60,10 +60,7 @@ contains
     real(8), allocatable :: R(:,:)
     real(8), allocatable :: R_inv(:,:)
 
-    !! J = L^{-T} Q, inverse transpose of L by columns of Q = [Q1 | Q2]
-    !! Q1 has the columns corresponding to active constraints 
-    real(8), allocatable :: J1(:,:)
-    real(8), allocatable :: J2(:,:)
+    real(8), allocatable :: J(:,:)
 
     integer, allocatable :: active_set(:)
     integer, allocatable :: n_p(:)
@@ -180,6 +177,8 @@ contains
     allocate(copy_real(m_eq + n_ineq))
     copy_real = 0
 
+    allocate(J(m_eq + n_ineq, m_eq + n_ineq))
+
     !!~~~ Begin Processing ~~~!!
     !! Solution iterate
     !! Start soln iterate at unconstrained minimum
@@ -241,15 +240,14 @@ contains
             z = matmul(matmul(J2, transpose(J2)), n_p)
 
             if (q .gt. 0) then
-              !TODO:> R_inv here!
               R_dim = shape(R)
               allocate(R_inv(R_dim(1), R_dim(2)))
               allocate(tau(q))
               allocate(ipiv(q))
 
               R_inv = R
-              call dgetrf(nvars,nvars,inv_chol_L,nvars,ipiv,info)
-              call dgetri(nvars,inv_chol_L,nvars,ipiv,work,nvars,info)
+              call dgetrf(q,q,inv_chol_L,q,ipiv,info)
+              call dgetri(q,inv_chol_L,q,ipiv,work,q,info)
 
               deallocate(ipiv)
               deallocate(work)
