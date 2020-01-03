@@ -1,9 +1,9 @@
 module quadprog_ng
   implicit none
 contains
-  subroutine solve_qp(quadr_coeff_G, linear_coeff_a,
-                      n_ineq, ineq_coef_C, ineq_vec_d,
-                      m_eq, eq_coef_A, eq_vec_b,
+  subroutine solve_qp(quadr_coeff_G, linear_coeff_a, &
+                      n_ineq, ineq_coef_C, ineq_vec_d, &
+                      m_eq, eq_coef_A, eq_vec_b, &
                       nvars, sol, ierr)
     !
     implicit none
@@ -22,8 +22,8 @@ contains
     real(8), allocatable, intent(in) :: ineq_vec_d(:)
 
     integer, intent(in) :: m_eq
-    real(8), allocatable, intent(in) :: eq_coef_A
-    real(8), allocatable, intent(in) :: eq_vec_b
+    real(8), allocatable, intent(in) :: eq_coef_A(:,:)
+    real(8), allocatable, intent(in) :: eq_vec_b(:,:)
 
     integer, intent(in) :: nvars
 
@@ -31,19 +31,20 @@ contains
     real(8), allocatable, intent(inout) :: sol(:)
 
     ! If ierr is set to anything except for zero, a problem happened
-    integer, intent(inout) :: ierr = 0    
+    integer, intent(inout) :: ierr 
+    integer :: info
 
     !!
     !! Internals
     !!
-    logical DONE = .FALSE.
-    logical FULL_STEP = .FALSE. 
-    logical ADDING_EQ_CONSTRAINTS = .TRUE.
+    logical :: DONE = .false.
+    logical :: FULL_STEP = .false. 
+    logical :: ADDING_EQ_CONSTRAINTS = .false.
 
-    logical first_pass = .TRUE. 
+    logical :: first_pass = .false. 
 
-    integer status = 0
-    integer irow, icol, iactive_set, icopy_idx = 1
+    integer :: status = 0
+    integer :: irow, icol, iactive_set, icopy_idx = 1
 
     real(8), allocatable :: G_inv(:,:)
     real(8), allocatable :: U_work(:,:)
@@ -56,37 +57,32 @@ contains
     real(8), allocatable :: inv_chol_L(:,:)
 
     !! QR factorization of B = L^{-1} N
-    real(8), allocatable :: Q(:,:)
+    real(8), allocatable :: Q_mat(:,:)
     real(8), allocatable :: R(:,:)
     real(8), allocatable :: R_inv(:,:)
 
     real(8), allocatable :: J(:,:)
-    real(8), allocatable :: N(:,:)
     real(8), allocatable :: B(:,:)
 
     integer, allocatable :: active_set(:)
     integer, allocatable :: n_p(:)
     integer, allocatable :: copy_integer(:)
-    integer :: p = 0, &
-               q = 0 
+    integer :: p, q = 0 
 
     !! lagrangian, each step in dual space
     real(8), allocatable :: u(:)
     !! lagrangian for each constraint in the active set
     real(8), allocatable :: lagr(:)
 
-    integer :: k_dropped = 0, &
-               j_dropped = 0, &
-               k = 0
+    integer :: k_dropped, j_dropped, k = 0
 
-    real(8), allocatable :: z(:), &  ! Step direction in primal space
-                            r(:)     ! Step dir, dual space
+    real(8), allocatable :: z_step(:), r_step(:)
 
     real(8) :: t1, t2, t
     real(8) :: MAX_DOUBLE = huge(t1)
 
     !! intermediate matrices for doing the inversions
-    real(8), allocatable :: work(:)
+    real(8), allocatable :: work(:), tau(:)
     integer, allocatable :: ipiv(:)
 
     !! temps for holding shape information
@@ -109,28 +105,30 @@ contains
     allocate(chol_L(nvars, nvars))
     allocate(inv_chol_L(nvars, nvars))
 
+    chol_L = quadr_coeff_G
+
     ! Lower triangular cholesky 
-    call dpotrf('L', nvars, L, nvars, status)
+    call dpotrf('L', nvars, chol_L, nvars, status)
 
     ! Set all non-lower-triangular entries to 0
     do icol=1,nvars
         do irow=1,nvars
             if (irow .lt. icol) then
-                L(irow, icol) = 0
+                chol_L(irow, icol) = 0
             endif
         enddo
     enddo
 
     allocate(G_inv(nvars,nvars))
 
-    G_inv = L
+    G_inv = chol_L
 
     ! calc G^{-1}
     call dpotri('L', nvars, G_inv, nvars, status)
 
     allocate(U_work(nvars,nvars))
 
-    U_work = G
+    U_work = quadr_coeff_G
 
     call dpotrf('U', 4, U_work, 4, info)
     call dpotri('U', 4, U_work, 4, info)
@@ -171,15 +169,13 @@ contains
     allocate(lagr(m_eq + n_ineq))
     allocate(u(m_eq + n_ineq))
 
-    allocate(z(nvars))
-    allocate(r(m_eq + n_ineq))
+    allocate(z_step(nvars))
+    allocate(r_step(m_eq + n_ineq))
 
     allocate(copy_integer(m_eq + n_ineq))
     copy_integer = 0
 
-    dim = shape()
-
-    allocate(Q(nvars,nvars))
+    allocate(Q_mat(nvars,nvars))
     allocate(R(m_eq + n_ineq, m_eq + n_ineq))
     allocate(R_inv(m_eq + n_ineq, m_eq + n_ineq))
 
@@ -241,11 +237,11 @@ contains
           !!###~~~~~~~~ Step 2(a) ~~~~~~~~###
           !!## Calculate step directions
           if (first_pass) then
-            z = matmul(G_inv, n_p)
+            z_step = matmul(G_inv, n_p)
 
             first_pass = .false.
           else
-            z = matmul(matmul(J(:,q+1:nvars), transpose(J(:,q+1:nvars))), n_p)
+            z_step = matmul(matmul(J(:,q+1:nvars), transpose(J(:,q+1:nvars))), n_p)
 
             if (q .gt. 0) then
               allocate(work(q))
@@ -258,7 +254,7 @@ contains
               deallocate(ipiv)
               deallocate(work)
 
-              r = matmul(matmul(R_inv(1:q,1:q), transpose(J(:,1:q))), n_p)
+              r_step = matmul(matmul(R_inv(1:q,1:q), transpose(J(:,1:q))), n_p)
 
               deallocate(R_inv)
             endif
@@ -266,7 +262,7 @@ contains
 
           !!###~~~~~~~~ Step 2(b) ~~~~~~~~###
           !!# partial step length t1 - max step in dual space
-          if ((q .eq. 0) .or. (r .le. 0) .or. ADDING_EQ_CONSTRAINTS) then
+          if ( ((q .eq. 0) .or. all(r_step .le. 0)) .or. ADDING_EQ_CONSTRAINTS) then
             t1 = MAX_DOUBLE 
           else
             t1 = MAX_DOUBLE
@@ -274,8 +270,8 @@ contains
 
             do iactive_set=m_eq, q
               k = active_set(iactive_set)
-              if ((r(iactive_set) .gt. 0) .and. ((lagr(iactive_set) / r(iactive_set)) .lt. t1)) then
-                t1 = lagr(iactive_set) / r(iactive_set)
+              if ((r_step(iactive_set) .gt. 0) .and. ((lagr(iactive_set) / r_step(iactive_set)) .lt. t1)) then
+                t1 = lagr(iactive_set) / r_step(iactive_set)
                 k_dropped = k
                 j_dropped = iactive_set + m_eq
               endif
@@ -283,13 +279,13 @@ contains
           endif
 
           !!# full step length t2 - min step in primal space
-          if (all(z .eq. 0)) then
+          if (all(z_step .eq. 0)) then
             t2 = MAX_DOUBLE
           else
             if (ADDING_EQ_CONSTRAINTS) then
-              t2 = (-1) * eq_prb(p) / (matmul(transpose(z), n_p))
+              t2 = (-1) * eq_prb(p) / (dot_product(z_step, n_p))
             else
-              t2 = (-1) * ineq_prb / (matmul(transpose(z), n_p))
+              t2 = (-1) * ineq_prb(p) / ((dot_product(z_step, n_p)))
             endif
           endif
 
@@ -308,8 +304,8 @@ contains
           !!# If t2 is infinite, then we took a partial step in the dual space.
           if (t2 .eq. MAX_DOUBLE) then
             !update lagrangian
-            r(q+1) = -1
-            lagr = lagr + (-1 * t * r)
+            r_step(q+1) = -1
+            lagr = lagr + (-1 * t * r_step)
 
             !! remove dropped constraint
             active_set(j_dropped) = 0
@@ -330,17 +326,17 @@ contains
             q = q - 1
 
             R = 0
-            Q = 0
-            Q(1:nvars, 1:q) = B(1:nvars,1:q)
+            Q_mat = 0
+            Q_mat(1:nvars, 1:q) = B(1:nvars,1:q)
 
             allocate(tau(q))
             allocate(work(q))
 
-            call dgeqrf(nvars, q, Q(1:nvars,1:q), nvars, tau, work, q, info)
+            call dgeqrf(nvars, q, Q_mat(1:nvars,1:q), nvars, tau, work, q, info)
 
-            R(1:q,1:q) = Q(1:q, 1:q)
+            R(1:q,1:q) = Q_mat(1:q, 1:q)
 
-            call dorgqr(q, q, q, Q(1:q,1:q), q, tau, work, q, info)
+            call dorgqr(q, q, q, Q_mat(1:q,1:q), q, tau, work, q, info)
 
             !! zero out lower entries of R
             do icol=1,q
@@ -352,15 +348,15 @@ contains
             enddo
 
             J = 0
-            J = matmul(transpose(inv_chol_L), Q)
+            J = matmul(transpose(inv_chol_L), Q_mat)
 
             !# go back to step 2(a)
             cycle
           endif
 
-          sol = sol + t * z
-          r(q+1) = -1
-          lagr = lagr + (-1 * t * r)
+          sol = sol + t * z_step
+          r_step(q+1) = -1
+          lagr = lagr + (-1 * t * r_step)
 
           !!# if we took a full step
           if (t .eq. t2) then
@@ -374,17 +370,17 @@ contains
             B(:,q) = matmul(inv_chol_L, n_p)
 
             R = 0
-            Q = 0
-            Q(1:nvars, 1:q) = B(1:nvars,1:q)
+            Q_mat = 0
+            Q_mat(1:nvars, 1:q) = B(1:nvars,1:q)
 
             allocate(tau(q))
             allocate(work(q))
 
-            call dgeqrf(nvars, q, Q(1:nvars,1:q), nvars, tau, work, q, info)
+            call dgeqrf(nvars, q, Q_mat(1:nvars,1:q), nvars, tau, work, q, info)
 
-            R(1:q,1:q) = Q(1:q, 1:q)
+            R(1:q,1:q) = Q_mat(1:q, 1:q)
 
-            call dorgqr(q, q, q, Q(1:q,1:q), q, tau, work, q, info)
+            call dorgqr(q, q, q, Q_mat(1:q,1:q), q, tau, work, q, info)
 
             !! zero out lower entries of R
             do icol=1,q
@@ -396,7 +392,7 @@ contains
             enddo
 
             J = 0
-            J = matmul(transpose(inv_chol_L), Q)
+            J = matmul(transpose(inv_chol_L), Q_mat)
 
             FULL_STEP = .true.
             exit
@@ -423,17 +419,17 @@ contains
             q = q - 1
 
             R = 0
-            Q = 0
-            Q(1:nvars, 1:q) = B(1:nvars,1:q)
+            Q_mat = 0
+            Q_mat(1:nvars, 1:q) = B(1:nvars,1:q)
 
             allocate(tau(q))
             allocate(work(q))
 
-            call dgeqrf(nvars, q, Q(1:nvars,1:q), nvars, tau, work, q, info)
+            call dgeqrf(nvars, q, Q_mat(1:nvars,1:q), nvars, tau, work, q, info)
 
-            R(1:q,1:q) = Q(1:q, 1:q)
+            R(1:q,1:q) = Q_mat(1:q, 1:q)
 
-            call dorgqr(q, q, q, Q(1:q,1:q), q, tau, work, q, info)
+            call dorgqr(q, q, q, Q_mat(1:q,1:q), q, tau, work, q, info)
 
             !! zero out lower entries of R
             do icol=1,q
@@ -445,7 +441,7 @@ contains
             enddo
 
             J = 0
-            J = matmul(transpose(inv_chol_L), Q)
+            J = matmul(transpose(inv_chol_L), Q_mat)
 
             cycle
           endif
@@ -463,5 +459,22 @@ end module
 
 
 program test
+  implicit none
+  real(8), allocatable :: G(:,:), lin_vec(:), C(:,:), d(:), A(:,:), b(:), sol(:)
+  integer :: irow, icol
+
+  integer, dimension(2) :: mat_dim
+
+  G = transpose(reshape((/4, -2, -2, 4/),(/2,2/)))
+
+  lin_vec = (/6, 0/)
+
+  C = transpose(reshape((/1, 0, 1, 0, 1, 1/),(/3,2/)))
+
+  mat_dim = shape(C)
+
+  do irow=1,mat_dim(1)
+    print *, C(irow,:)
+  enddo
 
 end program test
