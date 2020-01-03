@@ -120,12 +120,12 @@ def quadprog_solve(quadr_coeff_G, linear_coeff_a,
                     t1 = np.inf
                     k_dropped = None
 
-                    for j in range(m_eq+1, len(active_set)):
+                    for j in range(m_eq, len(active_set)):
                         k = active_set[j]
                         if (r[j] > 0) and (lagr[j] / r[j]) < t1:
                             t1 = lagr[j]/r[j]
                             k_dropped = k
-                            j_dropped = j
+                            j_dropped = j + m_eq
 
                     t1 = np.ravel(t1)[0]
 
@@ -171,6 +171,9 @@ def quadprog_solve(quadr_coeff_G, linear_coeff_a,
                     J1 = Linv.T * Q[:,[x for x in range(0, q)]]
                     J2 = Linv.T * Q[:,[x for x in range(q, Q.shape[1])]]
 
+                    print("Q shape:", np.shape(Q))
+                    print("R shape:", np.shape(R))
+
                     # go back to step 2(a)
                     continue
 
@@ -196,6 +199,10 @@ def quadprog_solve(quadr_coeff_G, linear_coeff_a,
                         J1 = Linv.T * Q[:,[x for x in range(0, q)]]
                         J2 = Linv.T * Q[:,[x for x in range(q, Q.shape[1])]]
 
+                    print("Q shape:", np.shape(Q))
+                    print("R shape:", np.shape(R))
+
+
                     # Exit current loop for Step 2, go back to Step 1
                     FULL_STEP = True
                     break
@@ -210,6 +217,10 @@ def quadprog_solve(quadr_coeff_G, linear_coeff_a,
                     Q,R = qr_delete(Q, R, j_dropped, 1, 'col')
                     J1 = Linv.T * Q[:,[x for x in range(0, q)]]
                     J2 = Linv.T * Q[:,[x for x in range(q, Q.shape[1])]]
+
+                    print("Q shape:", np.shape(Q))
+                    print("R shape:", np.shape(R))
+
 
                     # Go back to step 2(a)
                     continue
