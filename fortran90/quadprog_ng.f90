@@ -23,7 +23,7 @@ contains
 
     integer, intent(in) :: m_eq
     real(8), allocatable, intent(in) :: eq_coef_A(:,:)
-    real(8), allocatable, intent(in) :: eq_vec_b(:,:)
+    real(8), allocatable, intent(in) :: eq_vec_b(:)
 
     integer, intent(in) :: nvars
 
@@ -196,7 +196,7 @@ contains
       ineq_prb = matmul(transpose(ineq_coef_C),sol) - ineq_vec_d
 
       if (ADDING_EQ_CONSTRAINTS) then
-        ineq_prb = matmul(transpose(ineq_coef_C),sol) - ineq_vec_d
+        eq_prb = matmul(transpose(eq_coef_A),sol) - eq_vec_b
       endif
 
       if (q .ge. m_eq) then
@@ -459,9 +459,11 @@ end module
 
 
 program test
+  use quadprog_ng
   implicit none
   real(8), allocatable :: G(:,:), lin_vec(:), C(:,:), d(:), A(:,:), b(:), sol(:)
   integer :: irow, icol
+  integer :: m_eq, n_ineq, ierr
 
   integer, dimension(2) :: mat_dim
 
@@ -471,10 +473,24 @@ program test
 
   C = transpose(reshape((/1, 0, 1, 0, 1, 1/),(/3,2/)))
 
-  mat_dim = shape(C)
+  d = (/0, 0, 2/)
 
-  do irow=1,mat_dim(1)
-    print *, C(irow,:)
-  enddo
+  allocate(A(1,1))
+  A = 0
+
+  allocate(b(1))
+  b = 1
+
+  m_eq = 0
+  n_ineq = 3
+
+  allocate(sol(2))
+
+  call solve_qp(G, lin_vec, &
+                      n_ineq, C, d, &
+                      m_eq, A, b, &
+                      2, sol, ierr)
+
+  print *, sol
 
 end program test
