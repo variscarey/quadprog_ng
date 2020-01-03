@@ -41,7 +41,7 @@ contains
     logical :: FULL_STEP = .false. 
     logical :: ADDING_EQ_CONSTRAINTS = .false.
 
-    logical :: first_pass = .false. 
+    logical :: first_pass = .true. 
 
     integer :: status = 0
     integer :: irow, icol, iactive_set, icopy_idx = 1
@@ -90,9 +90,9 @@ contains
 
     !!~~~ Allocations & Initializations ~~~!!
     if (m_eq .eq. 0) then
-      ADDING_EQ_CONSTRAINTS = .true.
+      ADDING_EQ_CONSTRAINTS = .false.
     else
-      ADDING_EQ_CONSTRAINTS = .false. 
+      ADDING_EQ_CONSTRAINTS = .true. 
     endif
 
     if (.not. (allocated(sol))) then
@@ -130,8 +130,10 @@ contains
 
     U_work = quadr_coeff_G
 
-    call dpotrf('U', 4, U_work, 4, info)
-    call dpotri('U', 4, U_work, 4, info)
+    call dpotrf('U', nvars, U_work, nvars, info)
+    call dpotri('U', nvars, U_work, nvars, info)
+    
+    print *, info
 
     do icol=1,nvars
         do irow=1,nvars
@@ -142,12 +144,12 @@ contains
     enddo
 
     !! Now hold onto L inverse, use LU factorization on it
-    allocate(tau(nvars))
+    allocate(work(nvars))
     allocate(ipiv(nvars))
 
     inv_chol_L = chol_L
-    call dgetrf(nvars,nvars,inv_chol_L,nvars,ipiv,info)
-    call dgetri(nvars,inv_chol_L,nvars,ipiv,work,nvars,info)
+    call dgetrf(nvars, nvars, inv_chol_L, nvars, ipiv, info)
+    call dgetri(nvars, inv_chol_L, nvars, ipiv, work, nvars, info)
 
     deallocate(chol_L)  ! Bounce the lower triangular, don't need it
     deallocate(ipiv)
@@ -193,7 +195,10 @@ contains
     !! Main loop
     !! ###~~~~~~~~ Step 1 ~~~~~~~~###
     do while (.not. DONE)
+      print *, "starting DONE loop..."
       ineq_prb = matmul(transpose(ineq_coef_C),sol) - ineq_vec_d
+
+      print *, ADDING_EQ_CONSTRAINTS
 
       if (ADDING_EQ_CONSTRAINTS) then
         eq_prb = matmul(transpose(eq_coef_A),sol) - eq_vec_b
@@ -205,7 +210,7 @@ contains
 
       if (any(ineq_prb < 0) .or. ADDING_EQ_CONSTRAINTS) then
         if (ADDING_EQ_CONSTRAINTS) then
-          p = q
+          p = q+1
           n_p = eq_coef_A(:,p)
         else
           do icol=1,n_ineq
@@ -228,6 +233,7 @@ contains
 
         !!###~~~~~~~~ Step 2 ~~~~~~~~###      
         do while (.not. FULL_STEP)
+          print *, "starting FULL_STEP loop..."
           ineq_prb = matmul(transpose(ineq_coef_C),sol) - ineq_vec_d
 
           if (ADDING_EQ_CONSTRAINTS) then
@@ -255,8 +261,6 @@ contains
               deallocate(work)
 
               r_step = matmul(matmul(R_inv(1:q,1:q), transpose(J(:,1:q))), n_p)
-
-              deallocate(R_inv)
             endif
           endif
 
@@ -338,6 +342,9 @@ contains
 
             call dorgqr(q, q, q, Q_mat(1:q,1:q), q, tau, work, q, info)
 
+            deallocate(tau)
+            deallocate(work)
+
             !! zero out lower entries of R
             do icol=1,q
               do irow=1,q
@@ -381,6 +388,9 @@ contains
             R(1:q,1:q) = Q_mat(1:q, 1:q)
 
             call dorgqr(q, q, q, Q_mat(1:q,1:q), q, tau, work, q, info)
+
+            deallocate(tau)
+            deallocate(work)
 
             !! zero out lower entries of R
             do icol=1,q
@@ -431,6 +441,9 @@ contains
 
             call dorgqr(q, q, q, Q_mat(1:q,1:q), q, tau, work, q, info)
 
+            deallocate(tau)
+            deallocate(work)
+
             !! zero out lower entries of R
             do icol=1,q
               do irow=1,q
@@ -451,6 +464,19 @@ contains
         DONE = .true.
       endif
     enddo 
+
+    deallocate(n_p)
+    deallocate(active_set)  
+    deallocate(lagr)
+    deallocate(u)
+    deallocate(z_step)
+    deallocate(r_step)
+    deallocate(copy_integer)
+    deallocate(Q_mat)
+    deallocate(R)
+    deallocate(R_inv)
+    deallocate(J)
+    deallocate(B)
 
     return
 
