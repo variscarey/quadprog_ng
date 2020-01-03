@@ -61,6 +61,8 @@ contains
     real(8), allocatable :: R_inv(:,:)
 
     real(8), allocatable :: J(:,:)
+    real(8), allocatable :: N(:,:)
+    real(8), allocatable :: B(:,:)
 
     integer, allocatable :: active_set(:)
     integer, allocatable :: n_p(:)
@@ -72,7 +74,6 @@ contains
     real(8), allocatable :: u(:)
     !! lagrangian for each constraint in the active set
     real(8), allocatable :: lagr(:)
-    real(8), allocatable :: copy_real(:)
 
     integer :: k_dropped = 0, &
                j_dropped = 0, &
@@ -88,8 +89,8 @@ contains
     real(8), allocatable :: work(:)
     integer, allocatable :: ipiv(:)
 
-    !! temps for holding 
-    integer, dimension(2) :: R_dim
+    !! temps for holding shape information
+    integer, dimension(2) :: mat_dim
 
     !!~~~ Allocations & Initializations ~~~!!
     if (m_eq .eq. 0) then
@@ -150,6 +151,7 @@ contains
     call dgetrf(nvars,nvars,inv_chol_L,nvars,ipiv,info)
     call dgetri(nvars,inv_chol_L,nvars,ipiv,work,nvars,info)
 
+    deallocate(chol_L)  ! Bounce the lower triangular, don't need it
     deallocate(ipiv)
     deallocate(work)
 
@@ -174,10 +176,18 @@ contains
 
     allocate(copy_integer(m_eq + n_ineq))
     copy_integer = 0
-    allocate(copy_real(m_eq + n_ineq))
-    copy_real = 0
 
-    allocate(J(m_eq + n_ineq, m_eq + n_ineq))
+    dim = shape()
+
+    allocate(Q(nvars,nvars))
+    allocate(R(m_eq + n_ineq, m_eq + n_ineq))
+    allocate(R_inv(m_eq + n_ineq, m_eq + n_ineq))
+
+    allocate(J(nvars,nvars))
+    J = 0
+
+    allocate(B(nvars, m_eq + n_ineq))
+    B = 0
 
     !!~~~ Begin Processing ~~~!!
     !! Solution iterate
@@ -216,9 +226,7 @@ contains
         endif
 
         lagr = 0
-        do irow=1,q
-          lagr(irow) = u(irow)
-        enddo
+        lagr(1:q) = u(1:q)
 
         FULL_STEP = .false. 
 
@@ -237,22 +245,20 @@ contains
 
             first_pass = .false.
           else
-            z = matmul(matmul(J2, transpose(J2)), n_p)
+            z = matmul(matmul(J(:,q+1:nvars), transpose(J(:,q+1:nvars))), n_p)
 
             if (q .gt. 0) then
-              R_dim = shape(R)
-              allocate(R_inv(R_dim(1), R_dim(2)))
-              allocate(tau(q))
+              allocate(work(q))
               allocate(ipiv(q))
 
-              R_inv = R
-              call dgetrf(q,q,inv_chol_L,q,ipiv,info)
-              call dgetri(q,inv_chol_L,q,ipiv,work,q,info)
+              R_inv(1:q,1:q) = R(1:q,1:q)
+              call dgetrf(q,q,R_inv(1:q,1:q),q,ipiv,info)
+              call dgetri(q,R_inv(1:q,1:q),q,ipiv,work,q,info)
 
               deallocate(ipiv)
               deallocate(work)
 
-              r = matmul(matmul(R_inv(1:q,1:q), transpose(J1)), n_p)
+              r = matmul(matmul(R_inv(1:q,1:q), transpose(J(:,1:q))), n_p)
 
               deallocate(R_inv)
             endif
@@ -266,12 +272,12 @@ contains
             t1 = MAX_DOUBLE
             k_dropped = 0
 
-            do iactive_set=meq+1, q
+            do iactive_set=m_eq, q
               k = active_set(iactive_set)
               if ((r(iactive_set) .gt. 0) .and. ((lagr(iactive_set) / r(iactive_set)) .lt. t1)) then
                 t1 = lagr(iactive_set) / r(iactive_set)
                 k_dropped = k
-                j_dropped = iactive_set
+                j_dropped = iactive_set + m_eq
               endif
             enddo
           endif
@@ -309,7 +315,7 @@ contains
             active_set(j_dropped) = 0
             icopy_idx = 1
             copy_integer = 0
-            do iactive_set=1,q+1
+            do iactive_set=1,q
               if (active_set(iactive_set) .gt. 0) then
                 copy_integer(icopy_idx) = active_set(iactive_set)
                 icopy_idx = icopy_idx + 1
@@ -317,10 +323,36 @@ contains
             enddo
             active_set = copy_integer
 
+            !TODO:> ADD QR UPDATE
+            B(:,j_dropped) = 0
+            B(:,j_dropped:q) = B(:,j_dropped+1:q+1)
+
             q = q - 1
 
-            !TODO:> ADD QR UPDATE
+            R = 0
+            Q = 0
+            Q(1:nvars, 1:q) = B(1:nvars,1:q)
 
+            allocate(tau(q))
+            allocate(work(q))
+
+            call dgeqrf(nvars, q, Q(1:nvars,1:q), nvars, tau, work, q, info)
+
+            R(1:q,1:q) = Q(1:q, 1:q)
+
+            call dorgqr(q, q, q, Q(1:q,1:q), q, tau, work, q, info)
+
+            !! zero out lower entries of R
+            do icol=1,q
+              do irow=1,q
+                if (irow .gt. icol) then
+                  R(irow,icol) = 0
+                endif
+              enddo
+            enddo
+
+            J = 0
+            J = matmul(transpose(inv_chol_L), Q)
 
             !# go back to step 2(a)
             cycle
@@ -336,15 +368,36 @@ contains
             active_set(q) = p
 
             u = 0
-            icopy_idx = 1
-            do iactive_set=1,q
-              if(lagr(iactive_set) .gt. 0) then
-                u(icopy_idx) = lagr(iactive_set)
-                icopy_idx = icopy_idx + 1
-              endif
-            enddo
+            u(1:q) = lagr(1:q)
 
             !TODO:> ADD QR_UPDATE
+            B(:,q) = matmul(inv_chol_L, n_p)
+
+            R = 0
+            Q = 0
+            Q(1:nvars, 1:q) = B(1:nvars,1:q)
+
+            allocate(tau(q))
+            allocate(work(q))
+
+            call dgeqrf(nvars, q, Q(1:nvars,1:q), nvars, tau, work, q, info)
+
+            R(1:q,1:q) = Q(1:q, 1:q)
+
+            call dorgqr(q, q, q, Q(1:q,1:q), q, tau, work, q, info)
+
+            !! zero out lower entries of R
+            do icol=1,q
+              do irow=1,q
+                if (irow .gt. icol) then
+                  R(irow,icol) = 0
+                endif
+              enddo
+            enddo
+
+            J = 0
+            J = matmul(transpose(inv_chol_L), Q)
+
             FULL_STEP = .true.
             exit
           endif
@@ -360,11 +413,40 @@ contains
                 icopy_idx = icopy_idx + 1
               endif
             enddo
+            active_set = 0
             active_set = copy_integer
+
+            !TODO:> ADD QR UPDATE
+            B(:,j_dropped) = 0
+            B(:,j_dropped:q) = B(:,j_dropped+1:q+1)
 
             q = q - 1
 
-            !TODO:> ADD QR UPDATE
+            R = 0
+            Q = 0
+            Q(1:nvars, 1:q) = B(1:nvars,1:q)
+
+            allocate(tau(q))
+            allocate(work(q))
+
+            call dgeqrf(nvars, q, Q(1:nvars,1:q), nvars, tau, work, q, info)
+
+            R(1:q,1:q) = Q(1:q, 1:q)
+
+            call dorgqr(q, q, q, Q(1:q,1:q), q, tau, work, q, info)
+
+            !! zero out lower entries of R
+            do icol=1,q
+              do irow=1,q
+                if (irow .gt. icol) then
+                  R(irow,icol) = 0
+                endif
+              enddo
+            enddo
+
+            J = 0
+            J = matmul(transpose(inv_chol_L), Q)
+
             cycle
           endif
 
