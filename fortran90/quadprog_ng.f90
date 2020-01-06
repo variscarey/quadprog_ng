@@ -58,6 +58,35 @@ contains
     return
   end subroutine
 
+  subroutine get_inverse(rank_A, in_mat_A, out_mat_A_Inv)
+    implicit none
+    integer, intent(in) :: rank_A
+    real(8), allocatable, intent(in) :: in_mat_A(:,:)
+    real(8), allocatable, intent(out) :: out_mat_A_Inv(:,:)
+
+    integer, allocatable :: ipiv(:)
+    real(8), allocatable :: work(:)
+
+    integer :: ierr
+    integer :: lwork
+
+    allocate(ipiv(rank_A))
+
+    if (.not. allocated(out_mat_A_Inv)) then
+      allocate(out_mat_A_Inv(rank_A, rank_A))
+    endif
+
+    out_mat_A_Inv = in_mat_A
+
+    call dgetrf(rank_A, rank_A, out_mat_A_Inv, rank_A, ipiv, ierr)
+
+    lwork = floor(1.5 * rank_A)
+    allocate(work(lwork))
+
+    call dgetri(rank_A, out_mat_A_Inv, rank_A, ipiv, work, lwork, ierr)
+
+  end subroutine
+
   subroutine solve_qp(quadr_coeff_G, linear_coeff_a, &
                       n_ineq, ineq_coef_C, ineq_vec_d, &
                       m_eq, eq_coef_A, eq_vec_b, &
