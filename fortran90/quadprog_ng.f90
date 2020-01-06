@@ -1,6 +1,63 @@
 module quadprog_ng
   implicit none
 contains
+  subroutine do_cholesky_and_inverse(rank_A, in_mat_A, out_mat_L, out_mat_Inv)
+    implicit none
+    integer, intent(in) :: rank_A
+    real(8), allocatable, intent(in) :: in_mat_A(:,:)
+    real(8), allocatable, intent(out) :: out_mat_L(:,:), out_mat_Inv(:,:)
+
+    integer :: irow, icol = 0
+    real(8), allocatable :: mat_U(:,:)
+
+    integer :: ierr
+
+    allocate(mat_U(rank_A, rank_A))
+
+    if (.not. allocated(out_mat_L)) then
+      allocate(out_mat_L(rank_A, rank_A))
+      out_mat_L = 0
+    endif
+
+    if (.not. allocated(out_mat_Inv)) then
+      allocate(out_mat_Inv(rank_A, rank_A))
+      out_mat_Inv = 0
+    endif
+
+    out_mat_L = in_mat_A
+    mat_U = in_mat_A
+
+    call dpotrf('L', rank_A, out_mat_L, rank_A, ierr)
+    call dpotrf('U', rank_A, mat_U, rank_A, ierr)
+
+    out_mat_Inv = out_mat_L
+
+    call dpotri('L', rank_A, out_mat_Inv, rank_A, ierr)
+    call dpotri('U', rank_A, mat_U, rank_A, ierr)
+
+    !! Zero out bad entries in upper and lower
+    do icol=1,rank_A
+        do irow=1,rank_A
+            if (irow .lt. icol) then
+                out_mat_Inv(irow, icol) = 0
+                out_mat_L(irow, icol) = 0
+            endif
+        enddo
+    enddo
+
+    do icol=1,rank_A
+        do irow=1,rank_A
+            if (irow .ge. icol) then
+                mat_U(irow, icol) = 0
+            endif
+        enddo
+    enddo
+
+    out_mat_Inv = out_mat_Inv + mat_U
+
+    return
+  end subroutine
+
   subroutine solve_qp(quadr_coeff_G, linear_coeff_a, &
                       n_ineq, ineq_coef_C, ineq_vec_d, &
                       m_eq, eq_coef_A, eq_vec_b, &
@@ -47,7 +104,6 @@ contains
     integer :: irow, icol, iactive_set, icopy_idx = 1
 
     real(8), allocatable :: G_inv(:,:)
-    real(8), allocatable :: U_work(:,:)
 
     real(8), allocatable :: ineq_prb(:)
     real(8), allocatable :: eq_prb(:)
@@ -105,65 +161,10 @@ contains
     allocate(chol_L(nvars, nvars))
     allocate(inv_chol_L(nvars, nvars))
 
-    chol_L = quadr_coeff_G
 
-    ! Lower triangular cholesky 
-    call dpotrf('L', nvars, chol_L, nvars, status)
+    !! HAD OLD CHOLESKY STUFF HERE
+    print *, "WARNING 1:> ADD CHOLESKY STUFF BACK HERE"
 
-    ! Set all non-lower-triangular entries to 0
-    do icol=1,nvars
-        do irow=1,nvars
-            if (irow .lt. icol) then
-                chol_L(irow, icol) = 0
-            endif
-        enddo
-    enddo
-
-    allocate(G_inv(nvars,nvars))
-
-    G_inv = chol_L
-
-    ! calc G^{-1}
-    call dpotri('L', nvars, G_inv, nvars, status)
-
-    allocate(U_work(nvars,nvars))
-
-    U_work = quadr_coeff_G
-
-    call dpotrf('U', nvars, U_work, nvars, info)
-    call dpotri('U', nvars, U_work, nvars, info)
-    
-    print *, info
-
-    do icol=1,nvars
-        do irow=1,nvars
-            if (irow .ge. icol) then
-                U_work(irow, icol) = 0
-            endif
-        enddo
-    enddo
-
-    !! Now hold onto L inverse, use LU factorization on it
-    allocate(work(nvars))
-    allocate(ipiv(nvars))
-
-    inv_chol_L = chol_L
-    call dgetrf(nvars, nvars, inv_chol_L, nvars, ipiv, info)
-    call dgetri(nvars, inv_chol_L, nvars, ipiv, work, nvars, info)
-
-    deallocate(chol_L)  ! Bounce the lower triangular, don't need it
-    deallocate(ipiv)
-    deallocate(work)
-
-    !! Begin adding the lower and upper terms
-    do icol=1,nvars
-      do irow=1,nvars
-        G_inv(irow, icol) = G_inv(irow,icol) + U_work(irow,icol)
-      enddo
-    enddo
-
-    !! Bounce the U_work matrix so we can re-use it later
-    deallocate(U_work)
 
     !! Allocate the other internals
     allocate(n_p(nvars))
@@ -195,10 +196,7 @@ contains
     !! Main loop
     !! ###~~~~~~~~ Step 1 ~~~~~~~~###
     do while (.not. DONE)
-      print *, "starting DONE loop..."
       ineq_prb = matmul(transpose(ineq_coef_C),sol) - ineq_vec_d
-
-      print *, ADDING_EQ_CONSTRAINTS
 
       if (ADDING_EQ_CONSTRAINTS) then
         eq_prb = matmul(transpose(eq_coef_A),sol) - eq_vec_b
@@ -233,7 +231,6 @@ contains
 
         !!###~~~~~~~~ Step 2 ~~~~~~~~###      
         do while (.not. FULL_STEP)
-          print *, "starting FULL_STEP loop..."
           ineq_prb = matmul(transpose(ineq_coef_C),sol) - ineq_vec_d
 
           if (ADDING_EQ_CONSTRAINTS) then
@@ -250,12 +247,14 @@ contains
             z_step = matmul(matmul(J(:,q+1:nvars), transpose(J(:,q+1:nvars))), n_p)
 
             if (q .gt. 0) then
-              allocate(work(q))
-              allocate(ipiv(q))
+              allocate(work(nvars))
+              allocate(ipiv(nvars))
 
+              info = 0
               R_inv(1:q,1:q) = R(1:q,1:q)
-              call dgetrf(q,q,R_inv(1:q,1:q),q,ipiv,info)
-              call dgetri(q,R_inv(1:q,1:q),q,ipiv,work,q,info)
+              
+              call dgetrf(q,q,R_inv,q,ipiv,info)
+              call dgetri(q,R_inv,q,ipiv,work,nvars,info)
 
               deallocate(ipiv)
               deallocate(work)
@@ -333,14 +332,14 @@ contains
             Q_mat = 0
             Q_mat(1:nvars, 1:q) = B(1:nvars,1:q)
 
-            allocate(tau(q))
-            allocate(work(q))
+            allocate(tau(nvars))
+            allocate(work(nvars))
 
-            call dgeqrf(nvars, q, Q_mat(1:nvars,1:q), nvars, tau, work, q, info)
+            call dgeqrf(nvars, q, Q_mat(1:nvars,1:q), nvars, tau, work, nvars, info) !!TODO:> figure out what should happen when q = 0
 
             R(1:q,1:q) = Q_mat(1:q, 1:q)
 
-            call dorgqr(q, q, q, Q_mat(1:q,1:q), q, tau, work, q, info)
+            call dorgqr(nvars, nvars, nvars, Q_mat(1:q,1:q), nvars, tau, work, nvars, info)
 
             deallocate(tau)
             deallocate(work)
@@ -380,14 +379,14 @@ contains
             Q_mat = 0
             Q_mat(1:nvars, 1:q) = B(1:nvars,1:q)
 
-            allocate(tau(q))
-            allocate(work(q))
+            allocate(tau(nvars))
+            allocate(work(nvars))
 
-            call dgeqrf(nvars, q, Q_mat(1:nvars,1:q), nvars, tau, work, q, info)
+            call dgeqrf(nvars, q, Q_mat(1:nvars,1:q), nvars, tau, work, nvars, info)
 
             R(1:q,1:q) = Q_mat(1:q, 1:q)
 
-            call dorgqr(q, q, q, Q_mat(1:q,1:q), q, tau, work, q, info)
+            call dorgqr(q, q, q, Q_mat, nvars, tau, work, nvars, info)
 
             deallocate(tau)
             deallocate(work)
@@ -432,14 +431,14 @@ contains
             Q_mat = 0
             Q_mat(1:nvars, 1:q) = B(1:nvars,1:q)
 
-            allocate(tau(q))
-            allocate(work(q))
+            allocate(tau(nvars))
+            allocate(work(nvars))
 
-            call dgeqrf(nvars, q, Q_mat(1:nvars,1:q), nvars, tau, work, q, info)
+            call dgeqrf(nvars, q, Q_mat(1:nvars,1:q), nvars, tau, work, nvars, info)
 
             R(1:q,1:q) = Q_mat(1:q, 1:q)
 
-            call dorgqr(q, q, q, Q_mat(1:q,1:q), q, tau, work, q, info)
+            call dorgqr(nvars, nvars, nvars, Q_mat(1:q,1:q), nvars, tau, work, nvars, info)
 
             deallocate(tau)
             deallocate(work)
