@@ -58,6 +58,7 @@ contains
     return
   end subroutine
 
+
   subroutine get_inverse(rank_A, in_mat_A, out_mat_A_Inv)
     implicit none
     integer, intent(in) :: rank_A
@@ -84,8 +85,67 @@ contains
     allocate(work(lwork))
 
     call dgetri(rank_A, out_mat_A_Inv, rank_A, ipiv, work, lwork, ierr)
-
   end subroutine
+
+
+  subroutine get_qr(nrow, ncol, in_mat_A, mat_Q, mat_R)
+    implicit none
+    integer, intent(in) :: nrow, ncol
+    real(8), allocatable, intent(in) :: in_mat_A(:,:)
+    real(8), allocatable, intent(out) :: mat_Q(:,:), mat_R(:,:)
+
+    real(8), allocatable :: work(:), tau(:), temp(:), temp_R(:,:)
+    integer :: lwork, ierr, irow, icol
+
+    allocate(tau(min(nrow, ncol)))
+    tau = 0
+    allocate(temp(1))
+    temp = 0
+
+    if (.not. allocated(mat_Q)) then
+      allocate(mat_Q(nrow, nrow))
+      mat_Q = 0
+    endif
+
+    if (.not. allocated(mat_R)) then
+      allocate(mat_R(nrow, ncol))
+      mat_R = 0
+    endif
+
+    mat_R = in_mat_A
+
+    !! Do a dummy call to find optimal lwork value
+    call dgeqrf(nrow, ncol, mat_R, nrow, tau, temp, -1, ierr)
+
+    lwork = int(temp(1))
+    allocate(work(lwork))
+
+    !! Form R
+    call dgeqrf(nrow, ncol, mat_R, nrow, tau, work, lwork, ierr)
+
+    allocate(temp_R(nrow, ncol))
+    temp_R = mat_R
+
+    !! Get Q back from it
+    call dorgqr(nrow, nrow, nrow, temp_R, nrow, tau, work, lwork, ierr)
+
+    mat_Q = temp_R(1:nrow, 1:nrow)
+
+    !! zero out bad entries to make R upper triangular
+    do icol=1,ncol
+        do irow=1,nrow
+            if (irow .gt. icol) then
+                mat_R(irow, icol) = 0
+            endif
+        enddo
+    enddo
+
+    deallocate(temp_R)
+    deallocate(work)
+    deallocate(tau)
+    deallocate(temp)
+  end subroutine
+
 
   subroutine solve_qp(quadr_coeff_G, linear_coeff_a, &
                       n_ineq, ineq_coef_C, ineq_vec_d, &
