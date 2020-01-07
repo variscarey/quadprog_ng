@@ -58,7 +58,6 @@ contains
     return
   end subroutine
 
-
   subroutine get_inverse(rank_A, in_mat_A, out_mat_A_Inv)
     implicit none
     integer, intent(in) :: rank_A
@@ -81,12 +80,14 @@ contains
 
     call dgetrf(rank_A, rank_A, out_mat_A_Inv, rank_A, ipiv, ierr)
 
-    lwork = floor(1.5 * rank_A)
+    lwork = ceiling(1.5 * rank_A)
     allocate(work(lwork))
 
     call dgetri(rank_A, out_mat_A_Inv, rank_A, ipiv, work, lwork, ierr)
-  end subroutine
 
+    deallocate(ipiv)
+    deallocate(work)
+  end subroutine
 
   subroutine get_qr(nrow, ncol, in_mat_A, mat_Q, mat_R)
     implicit none
@@ -102,15 +103,21 @@ contains
     allocate(temp(1))
     temp = 0
 
+    print *, "doing allocations"
+
     if (.not. allocated(mat_Q)) then
       allocate(mat_Q(nrow, nrow))
       mat_Q = 0
     endif
 
+    print *, "allocated q"
+
     if (.not. allocated(mat_R)) then
       allocate(mat_R(nrow, ncol))
       mat_R = 0
     endif
+
+    print *, "allocated r"
 
     mat_R = in_mat_A
 
@@ -120,16 +127,25 @@ contains
     lwork = int(temp(1))
     allocate(work(lwork))
 
+    print *, "starting R"
+
     !! Form R
     call dgeqrf(nrow, ncol, mat_R, nrow, tau, work, lwork, ierr)
 
-    allocate(temp_R(nrow, ncol))
-    temp_R = mat_R
+    print *, "doing temp move"
+
+    allocate(temp_R(nrow, max(nrow, ncol)))
+    temp_R = 0
+    temp_R(1:nrow,1:ncol) = mat_R(1:nrow, 1:ncol)
+
+    print *, "start Q"
 
     !! Get Q back from it
     call dorgqr(nrow, nrow, nrow, temp_R, nrow, tau, work, lwork, ierr)
 
     mat_Q = temp_R(1:nrow, 1:nrow)
+
+    print *, "done Q"
 
     !! zero out bad entries to make R upper triangular
     do icol=1,ncol
@@ -226,12 +242,6 @@ contains
     real(8) :: t1, t2, t
     real(8) :: MAX_DOUBLE = huge(t1)
 
-    !! intermediate matrices for doing the inversions
-    real(8), allocatable :: work(:), tau(:)
-    integer, allocatable :: ipiv(:)
-
-    !! temps for holding shape information
-    integer, dimension(2) :: mat_dim
 
     !!~~~ Allocations & Initializations ~~~!!
     if (m_eq .eq. 0) then
@@ -250,10 +260,9 @@ contains
     allocate(chol_L(nvars, nvars))
     allocate(inv_chol_L(nvars, nvars))
 
+    call do_cholesky_and_inverse(nvars, quadr_coeff_G, chol_L, G_inv)
 
-    !! HAD OLD CHOLESKY STUFF HERE
-    print *, "WARNING 1:> ADD CHOLESKY STUFF BACK HERE"
-
+    call get_inverse(nvars, chol_L, inv_chol_L)
 
     !! Allocate the other internals
     allocate(n_p(nvars))
@@ -323,7 +332,7 @@ contains
           ineq_prb = matmul(transpose(ineq_coef_C),sol) - ineq_vec_d
 
           if (ADDING_EQ_CONSTRAINTS) then
-            ineq_prb = matmul(transpose(ineq_coef_C),sol) - ineq_vec_d
+            eq_prb = matmul(transpose(eq_coef_A),sol) - eq_vec_b
           endif
 
           !!###~~~~~~~~ Step 2(a) ~~~~~~~~###
@@ -336,17 +345,12 @@ contains
             z_step = matmul(matmul(J(:,q+1:nvars), transpose(J(:,q+1:nvars))), n_p)
 
             if (q .gt. 0) then
-              allocate(work(nvars))
-              allocate(ipiv(nvars))
+              if (allocated(R_inv)) then 
+                deallocate(R_inv)
+                allocate(R_inv(q,q))
+              endif
 
-              info = 0
-              R_inv(1:q,1:q) = R(1:q,1:q)
-              
-              call dgetrf(q,q,R_inv,q,ipiv,info)
-              call dgetri(q,R_inv,q,ipiv,work,nvars,info)
-
-              deallocate(ipiv)
-              deallocate(work)
+              call get_inverse(q, R, R_inv)
 
               r_step = matmul(matmul(R_inv(1:q,1:q), transpose(J(:,1:q))), n_p)
             endif
@@ -393,8 +397,9 @@ contains
             return
           endif
 
-          !!# If t2 is infinite, then we took a partial step in the dual space.
+          !!# If t2 is infinite, then a full step in primal space infeasible
           if (t2 .eq. MAX_DOUBLE) then
+            print *, "t2 inf - no full step"
             !update lagrangian
             r_step(q+1) = -1
             lagr = lagr + (-1 * t * r_step)
@@ -412,35 +417,15 @@ contains
             active_set = copy_integer
 
             !TODO:> ADD QR UPDATE
+            q = q - 1
             B(:,j_dropped) = 0
             B(:,j_dropped:q) = B(:,j_dropped+1:q+1)
 
-            q = q - 1
+            deallocate(Q_mat)
+            deallocate(R)
+            deallocate(R_inv)
 
-            R = 0
-            Q_mat = 0
-            Q_mat(1:nvars, 1:q) = B(1:nvars,1:q)
-
-            allocate(tau(nvars))
-            allocate(work(nvars))
-
-            call dgeqrf(nvars, q, Q_mat(1:nvars,1:q), nvars, tau, work, nvars, info) !!TODO:> figure out what should happen when q = 0
-
-            R(1:q,1:q) = Q_mat(1:q, 1:q)
-
-            call dorgqr(nvars, nvars, nvars, Q_mat(1:q,1:q), nvars, tau, work, nvars, info)
-
-            deallocate(tau)
-            deallocate(work)
-
-            !! zero out lower entries of R
-            do icol=1,q
-              do irow=1,q
-                if (irow .gt. icol) then
-                  R(irow,icol) = 0
-                endif
-              enddo
-            enddo
+            call get_qr(nvars, q, B, Q_mat, R)
 
             J = 0
             J = matmul(transpose(inv_chol_L), Q_mat)
@@ -455,6 +440,8 @@ contains
 
           !!# if we took a full step
           if (t .eq. t2) then
+            print *, "full step t == t2"
+
             q = q+1
             active_set(q) = p
 
@@ -462,32 +449,17 @@ contains
             u(1:q) = lagr(1:q)
 
             !TODO:> ADD QR_UPDATE
-            B(:,q) = matmul(inv_chol_L, n_p)
+            if (ADDING_EQ_CONSTRAINTS) then
+              B(:,q) = matmul(inv_chol_L, eq_coef_A(:,p))
+            else
+              B(:,q) = matmul(inv_chol_L, ineq_coef_C(:,p))
+            endif
 
-            R = 0
-            Q_mat = 0
-            Q_mat(1:nvars, 1:q) = B(1:nvars,1:q)
+            deallocate(Q_mat)
+            deallocate(R)
+            deallocate(R_inv)
 
-            allocate(tau(nvars))
-            allocate(work(nvars))
-
-            call dgeqrf(nvars, q, Q_mat(1:nvars,1:q), nvars, tau, work, nvars, info)
-
-            R(1:q,1:q) = Q_mat(1:q, 1:q)
-
-            call dorgqr(q, q, q, Q_mat, nvars, tau, work, nvars, info)
-
-            deallocate(tau)
-            deallocate(work)
-
-            !! zero out lower entries of R
-            do icol=1,q
-              do irow=1,q
-                if (irow .gt. icol) then
-                  R(irow,icol) = 0
-                endif
-              enddo
-            enddo
+            call get_qr(nvars, q, B, Q_mat, R)
 
             J = 0
             J = matmul(transpose(inv_chol_L), Q_mat)
@@ -498,6 +470,8 @@ contains
 
           if (t .eq. t1) then
             !! remove dropped constraint
+            print *, "partial step t == t1"
+
             active_set(j_dropped) = 0
             icopy_idx = 1
             copy_integer = 0
@@ -511,35 +485,15 @@ contains
             active_set = copy_integer
 
             !TODO:> ADD QR UPDATE
+            q = q - 1
             B(:,j_dropped) = 0
             B(:,j_dropped:q) = B(:,j_dropped+1:q+1)
 
-            q = q - 1
+            deallocate(Q_mat)
+            deallocate(R)
+            deallocate(R_inv)
 
-            R = 0
-            Q_mat = 0
-            Q_mat(1:nvars, 1:q) = B(1:nvars,1:q)
-
-            allocate(tau(nvars))
-            allocate(work(nvars))
-
-            call dgeqrf(nvars, q, Q_mat(1:nvars,1:q), nvars, tau, work, nvars, info)
-
-            R(1:q,1:q) = Q_mat(1:q, 1:q)
-
-            call dorgqr(nvars, nvars, nvars, Q_mat(1:q,1:q), nvars, tau, work, nvars, info)
-
-            deallocate(tau)
-            deallocate(work)
-
-            !! zero out lower entries of R
-            do icol=1,q
-              do irow=1,q
-                if (irow .gt. icol) then
-                  R(irow,icol) = 0
-                endif
-              enddo
-            enddo
+            call get_qr(nvars, q, B, Q_mat, R)
 
             J = 0
             J = matmul(transpose(inv_chol_L), Q_mat)
