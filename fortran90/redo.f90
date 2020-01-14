@@ -119,7 +119,8 @@ contains
 
     print *, "allocated r"
 
-    mat_R = in_mat_A
+    mat_R = 0
+    mat_R(1:nrow, 1:ncol) = in_mat_A(1:nrow, 1:ncol)
 
     !! Do a dummy call to find optimal lwork value
     call dgeqrf(nrow, ncol, mat_R, nrow, tau, temp, -1, ierr)
@@ -143,7 +144,8 @@ contains
     !! Get Q back from it
     call dorgqr(nrow, nrow, nrow, temp_R, nrow, tau, work, lwork, ierr)
 
-    mat_Q = temp_R(1:nrow, 1:nrow)
+    mat_Q = 0
+    mat_Q(1:nrow, 1:ncol) = temp_R(1:nrow, 1:nrow)
 
     print *, "done Q"
 
@@ -194,9 +196,17 @@ contains
     real(8), allocatable, intent(inout) :: sol(:)
 
     !!~~~~~~~~~~ Internals ~~~~~~~~~~!!
-    logical :: DONE, FULL_STEP, ADDING_EQ_CONSTRAINTS = .false.
+    logical :: DONE, FULL_STEP = .false.
     logical :: FIRST_PASS = .true. 
 
+    real(8), allocatable :: L_chol(:,:), L_inv(:,:)
+
+    real(8) :: t, t1, t2
+    real(8) :: MAX_DOUBLE = huge(t)
+
+    !!~~~~~~~~ Allocations ~~~~~~~~!!
+    allocate(L_chol(nvars,nvars))
+    allocate(L_inv(nvars,nvars))
     
 
   end subroutine solve_qp
