@@ -177,7 +177,6 @@ contains
     !! 
 
     ! quadratic coefficient matrix G in 
-    ! 
     real(8), allocatable, intent(in) :: quadr_coeff_G(:,:)
     real(8), allocatable, intent(in) :: linear_coeff_a(:)
     
@@ -190,7 +189,7 @@ contains
     real(8), allocatable, intent(in) :: eq_vec_b(:)
 
     integer, intent(in) :: nvars
-    integer, intent(inout) :: 
+    integer, intent(inout) :: ierr
 
     ! the solution iterate
     real(8), allocatable, intent(inout) :: sol(:)
@@ -199,6 +198,9 @@ contains
     logical :: DONE, FULL_STEP = .false.
     logical :: FIRST_PASS = .true. 
 
+    integer :: irow, icol
+
+    real(8), allocatable :: G_inv(:,:)
     real(8), allocatable :: L_chol(:,:), L_inv(:,:)
 
     real(8) :: t, t1, t2
@@ -207,7 +209,15 @@ contains
     !!~~~~~~~~ Allocations ~~~~~~~~!!
     allocate(L_chol(nvars,nvars))
     allocate(L_inv(nvars,nvars))
+    allocate(G_inv(nvars,nvars))
     
+    call do_cholesky_and_inverse(nvars, quadr_coeff_G, L_chol, G_inv)
+    call get_inverse(nvars, L_chol, L_inv)
+
+    sol = (-1) * matmul(G_inv, linear_coeff_a)
+
+    deallocate(L_chol)
+    deallocate(G_inv)
 
   end subroutine solve_qp
 end module
@@ -248,4 +258,4 @@ program test
 
   print *, sol
 
-end program tes
+end program test
