@@ -76,11 +76,12 @@ contains
       allocate(out_mat_A_Inv(rank_A, rank_A))
     endif
 
-    out_mat_A_Inv = in_mat_A
+    out_mat_A_Inv = 0
+    out_mat_A_Inv(1:rank_A, 1:rank_A) = in_mat_A(1:rank_A, 1:rank_A)
 
     call dgetrf(rank_A, rank_A, out_mat_A_Inv, rank_A, ipiv, ierr)
 
-    lwork = ceiling(1.5 * rank_A)
+    lwork = 32 * rank_A
     allocate(work(lwork))
 
     call dgetri(rank_A, out_mat_A_Inv, rank_A, ipiv, work, lwork, ierr)
@@ -208,6 +209,8 @@ contains
     real(8), allocatable :: G_inv(:,:)
     real(8), allocatable :: L_chol(:,:), L_inv(:,:)
 
+    real(8), allocatable :: matB(:,:), matJ(:,:), matQ(:,:), matR(:,:)
+
     real(8) :: t, t1, t2
     real(8) :: MAX_DOUBLE = huge(t)
 
@@ -226,6 +229,13 @@ contains
 
     allocate(u(n_ineq))
     allocate(lagr(n_ineq))
+
+    allocate(matQ(nvars, nvars))
+    allocate(matJ(nvars, nvars))
+
+    allocate(matB(nvars, n_ineq))    
+    allocate(matR(nvars, n_ineq))
+    allocate(Rinv(nvars, n_ineq))
 
     do while (.not. DONE)
       ineq_prb = matmul(transpose(ineq_coef_C), sol) - ineq_vec_d
@@ -248,6 +258,21 @@ contains
         lagr(1:q) = u(1:q)
 
         FULL_STEP = .false.
+
+        do while (.not. FULL_STEP) 
+          ineq_prb = matmul(transpose(ineq_coef_C), sol) - ineq_vec_d
+
+          if (FIRST_PASS) then
+            z = matmul(G_inv, n_p)
+            FIRST_PASS = .false. 
+          else
+            z = matmul(matmul(J(:, 1:q), transpose(J(:, 1:q))), n_p)
+
+
+          endif 
+
+
+        enddo
 
       endif
 
