@@ -190,11 +190,12 @@ contains
     !!~~~~~~~~~~ Internals ~~~~~~~~~~!!
     logical :: DONE, FULL_STEP = .false.
     logical :: FIRST_PASS = .true. 
+    logical :: ADDING_EQ_CONSTRAINTS = .false. 
 
     integer :: irow, icol
     integer :: p,q = 0
 
-    real(8), allocatable :: ineq_prb(:)
+    real(8), allocatable :: ineq_prb(:), eq_prb(:)
     real(8), allocatable :: n_p(:)
     real(8), allocatable :: u(:), lagr(:)
 
@@ -224,12 +225,12 @@ contains
     allocate(ineq_prb(nvars))
     allocate(n_p(nvars))
 
-    allocate(u(n_ineq))
-    allocate(lagr(n_ineq))
+    allocate(u(n_ineq + m_eq))
+    allocate(lagr(n_ineq + m_eq))
 
     allocate(z_step(nvars))
     z_step = 0
-    allocate(r_step(n_ineq))
+    allocate(r_step(n_ineq + m_eq))
     r_step = 0
 
     allocate(matQ(nvars, nvars))
@@ -237,30 +238,51 @@ contains
     allocate(matJ(nvars, nvars))
     matJ = 0
 
-    allocate(matB(nvars, n_ineq))    
+    allocate(matB(nvars, n_ineq + m_eq))    
     matB = 0
-    allocate(matR(nvars, n_ineq))
+    allocate(matR(nvars, n_ineq + m_eq))
     matR = 0
-    allocate(Rinv(nvars, n_ineq))
+    allocate(Rinv(nvars, n_ineq + m_eq))
     Rinv = 0
 
-    allocate(active_set(n_ineq))
+    allocate(active_set(n_ineq + m_eq))
     active_set = 0
 
     DONE = .false.
 
+    if (m_eq .gt. 0) then
+      ADDING_EQ_CONSTRAINTS = .true.
+    endif
+
+    q = 0
+
+    FIRST_PASS = .true.
+
     do while (.not. DONE)
       ineq_prb = matmul(transpose(ineq_coef_C), sol) - ineq_vec_d
 
-      if (any(ineq_prb .lt. 0)) then 
-        do icol=1,n_ineq
-          if (ineq_prb(icol) .lt. 0) then
-            p = icol
-            exit
-          endif
-        enddo
+      if (ADDING_EQ_CONSTRAINTS) then
+        eq_prb = matmul(transpose(eq_coef_A), sol) - eq_vec_b
+      endif
 
-        n_p = ineq_coef_C(:,p)
+      if (q .eq. m_eq) then
+        ADDING_EQ_CONSTRAINTS = .false. 
+      endif
+
+      if (any(ineq_prb .lt. 0) .or. ADDING_EQ_CONSTRAINTS) then 
+        if (ADDING_EQ_CONSTRAINTS) then
+          p = m_eq - q
+          n_p = eq_coef_A(:,p)
+        else
+          do icol=1,n_ineq
+            if (ineq_prb(icol) .lt. 0) then
+              p = icol
+              exit
+            endif
+          enddo
+
+          n_p = ineq_coef_C(:,p)
+        endif
 
         if (q .eq. 0) then
           u = 0
@@ -273,6 +295,9 @@ contains
 
         do while (.not. FULL_STEP) 
           ineq_prb = matmul(transpose(ineq_coef_C), sol) - ineq_vec_d
+          if (ADDING_EQ_CONSTRAINTS) then
+            eq_prb = matmul(transpose(eq_coef_A), sol) - eq_vec_b
+          endif
 
           !!###~~~~~~~~ Step 2(a) ~~~~~~~~###
           !!## Calculate step directions
@@ -293,13 +318,13 @@ contains
 
           !!###~~~~~~~~ Step 2(b) ~~~~~~~~###
           !! partial step length t1 - max step in dual space          
-          if ((q .eq. 0) .or. (all(r_step .le. 0))) then
+          if ((q .eq. 0) .or. (all(r_step .le. 0)) .or. ADDING_EQ_CONSTRAINTS) then
             t1 = MAX_DOUBLE
           else
             t1 = MAX_DOUBLE
             k_dropped = 0
 
-            do icol=1,q
+            do icol=m_eq+1,q
               if ((r_step(icol) .gt. 0) .and. (lagr(icol) / r_step(icol) .lt. t1)) then
                 t1 = lagr(icol) / r_step(icol)
                 k_dropped = active_set(icol)
@@ -312,7 +337,11 @@ contains
           if (all(z_step .eq. 0)) then
             t2 = MAX_DOUBLE
           else
-            t2 = (-1) * ineq_prb(p) / dot_product(z_step, n_p)
+            if (ADDING_EQ_CONSTRAINTS) then
+              t2 = (-1) * eq_prb(p) / dot_product(z_step, n_p)
+            else
+              t2 = (-1) * ineq_prb(p) / dot_product(z_step, n_p)
+            endif
           endif
 
           t = min(t1, t2)
@@ -441,11 +470,12 @@ program test
 
   lin_vec = (/6, 0/)
 
+  print *, "Running Test 00 :: https://tinyurl.com/ux8x4dv"
+
   allocate(C(2,3))
 
   C(1,:) = (/1, 0, 1/)
   C(2,:) = (/0, 1, 1/)
-
 
   d = (/0, 0, 2/)
 
@@ -460,11 +490,38 @@ program test
 
   allocate(sol(2))
 
+
+
   call solve_qp(G, lin_vec, &
                       n_ineq, C, d, &
                       m_eq, A, b, &
                       2, sol, ierr)
 
   print *, sol
+
+  deallocate(C)
+
+  print *, "Running Test 01 :: https://tinyurl.com/soytugm"
+
+  allocate(C(2,2))
+  C(1,:) = (/1, 0/)
+  C(2,:) = (/0, 1/)
+
+  d = (/1, 0/)
+
+  A = reshape((/1,1/), (/2, 1/))
+
+  b = (/6/)
+
+  m_eq = 1
+  n_ineq = 2
+
+  call solve_qp(G, lin_vec, &
+                n_ineq, C, d, &
+                m_eq, A, b, &
+                2, sol, ierr)
+
+  print *, sol
+
 
 end program test
