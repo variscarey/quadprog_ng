@@ -5,7 +5,7 @@ contains
     implicit none
     integer, intent(in) :: rank_A
     real(8), allocatable, intent(in) :: in_mat_A(:,:)
-    real(8), allocatable, intent(out) :: out_mat_L(:,:), out_mat_Inv(:,:)
+    real(8), allocatable, intent(inout) :: out_mat_L(:,:), out_mat_Inv(:,:)
 
     integer :: irow, icol = 0
     real(8), allocatable :: mat_U(:,:)
@@ -62,7 +62,7 @@ contains
     implicit none
     integer, intent(in) :: rank_A
     real(8), allocatable, intent(in) :: in_mat_A(:,:)
-    real(8), allocatable, intent(out) :: out_mat_A_Inv(:,:)
+    real(8), allocatable, intent(inout) :: out_mat_A_Inv(:,:)
 
     integer, allocatable :: ipiv(:)
     real(8), allocatable :: work(:)
@@ -94,7 +94,7 @@ contains
     implicit none
     integer, intent(in) :: nrow, ncol
     real(8), allocatable, intent(in) :: in_mat_A(:,:)
-    real(8), allocatable, intent(out) :: mat_Q(:,:), mat_R(:,:)
+    real(8), allocatable, intent(inout) :: mat_Q(:,:), mat_R(:,:)
 
     real(8), allocatable :: work(:), tau(:), temp(:), temp_R(:,:)
     integer :: lwork, ierr, irow, icol
@@ -328,32 +328,57 @@ contains
           !! If t2 infinite, then a full step is infeasible
           if (t2 .eq. MAX_DOUBLE) then
             !update lagr
+            r_step = (-1) * r_step
+            r_step(q+1) = 1
+            lagr = lagr + (t * r_step)
 
             !update active_set
+            do icol=j_dropped,n_ineq-1
+              active_set(icol) = active_set(icol+1)
+            enddo
+
+            q = q - 1
 
             !update QR
+
 
             cycle
           endif
 
           sol = sol + (t * z)
-          !update lagr
+          
+          r_step = (-1) * r_step
+          r_step(q+1) = 1
+          lagr = lagr + (t * r_step)
 
+          !! took a step in primal space
           if (t .eq. t2) then
             ! update active set
+            active_set(q+1) = p
+            q = q + 1
 
             ! update lagr
+            u = 0
+            u(1:q) = lagr(1:q)
 
             ! update QR
+            B(:,q) = matmul(L_inv, n_p)
 
             FULL_STEP = .true. 
             exit
           endif
 
+          !! took a step in dual space
           if (t .eq. t1) then
-            ! update active set
+            !update active_set
+            do icol=j_dropped,n_ineq-1
+              active_set(icol) = active_set(icol+1)
+            enddo
+
+            q = q - 1
 
             ! update QR
+
             cycle
           endif
         enddo
