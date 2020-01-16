@@ -469,6 +469,18 @@ contains
     deallocate(ineq_prb)
     deallocate(n_p)
 
+    deallocate(u)
+    deallocate(lagr)
+    deallocate(z_step)
+    deallocate(r_step)
+
+    deallocate(matQ)
+    deallocate(matJ)
+    deallocate(matB)
+    deallocate(matR)
+    deallocate(Rinv)
+    deallocate(active_set)
+
   end subroutine solve_qp
 end module
 
