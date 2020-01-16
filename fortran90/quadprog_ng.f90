@@ -285,6 +285,7 @@ contains
               do irow=m_eq+1,q
                 if (active_set(irow) .eq. p) then
                   BURN_FLAG = .true.
+                  exit
                 endif
               enddo
 
