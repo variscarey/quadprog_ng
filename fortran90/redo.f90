@@ -211,8 +211,13 @@ contains
 
     real(8), allocatable :: matB(:,:), matJ(:,:), matQ(:,:), matR(:,:)
 
+    real(8), allocatable :: z_step(:), r_step(:)
+
     real(8) :: t, t1, t2
     real(8) :: MAX_DOUBLE = huge(t)
+
+    integer :: k, k_dropped, j_dropped
+    integer, allocatable :: active_set(:)
 
     !!~~~~~~~~ Allocations ~~~~~~~~!!
     allocate(L_chol(nvars,nvars))
@@ -230,12 +235,18 @@ contains
     allocate(u(n_ineq))
     allocate(lagr(n_ineq))
 
+    allocate(z_step(nvars))
+    allocate(r_step(n_ineq))
+
     allocate(matQ(nvars, nvars))
     allocate(matJ(nvars, nvars))
 
     allocate(matB(nvars, n_ineq))    
     allocate(matR(nvars, n_ineq))
     allocate(Rinv(nvars, n_ineq))
+
+    allocate(active_set(n_ineq))
+    active_set = 0
 
     do while (.not. DONE)
       ineq_prb = matmul(transpose(ineq_coef_C), sol) - ineq_vec_d
@@ -262,18 +273,93 @@ contains
         do while (.not. FULL_STEP) 
           ineq_prb = matmul(transpose(ineq_coef_C), sol) - ineq_vec_d
 
+          !!###~~~~~~~~ Step 2(a) ~~~~~~~~###
+          !!## Calculate step directions
           if (FIRST_PASS) then
-            z = matmul(G_inv, n_p)
+            z_step = matmul(G_inv, n_p)
             FIRST_PASS = .false. 
           else
-            z = matmul(matmul(J(:, 1:q), transpose(J(:, 1:q))), n_p)
+            z_step = matmul(matmul(J(:, q+1:), transpose(J(:, q+1:))), n_p)
 
+            if (q .gt. 0) then
+              Rinv = 0
+              call get_inverse(q, matR, Rinv)
 
-          endif 
+              r_step = 0
+              r_step(1:q) = matmul(matmul(Rinv(1:q,1:q), transpose(J(:,1:q))), n_p)
+            endif
+          endif
 
+          !!###~~~~~~~~ Step 2(b) ~~~~~~~~###
+          !! partial step length t1 - max step in dual space          
+          if ((q .eq. 0) .or. (all(r .le. 0))) then
+            t1 = MAX_DOUBLE
+          else
+            t1 = MAX_DOUBLE
+            k_dropped = 0
 
+            do icol=1,q
+              if ((r(icol) .gt. 0) .and. (lagr(icol) / r_step(icol) .lt. t1)) then
+                t1 = lagr(icol) / r_step(icol)
+                k_dropped = active_set(icol)
+                j_dropped = icol
+              endif
+            enddo
+          endif
+
+          !! full step length t2 - min step in primal space
+          if (all(z .eq. 0)) then
+            t2 = MAX_DOUBLE
+          else
+            t2 = (-1) * ineq_prb(p) / dot_product(z_step, n_p)
+          endif
+
+          t = min(t1, t2)
+
+          !!###~~~~~~~~ Step 2(c) ~~~~~~~~###
+          if (t .eq. MAX_DOUBLE) then
+            print *, "infeasible! stop here!"
+            FULL_STEP = .true.
+            DONE = .true. 
+            ierr = 420
+            return
+          endif
+
+          !! If t2 infinite, then a full step is infeasible
+          if (t2 .eq. MAX_DOUBLE) then
+            !update lagr
+
+            !update active_set
+
+            !update QR
+
+            cycle
+          endif
+
+          sol = sol + (t * z)
+          !update lagr
+
+          if (t .eq. t2) then
+            ! update active set
+
+            ! update lagr
+
+            ! update QR
+
+            FULL_STEP = .true. 
+            exit
+          endif
+
+          if (t .eq. t1) then
+            ! update active set
+
+            ! update QR
+            cycle
+          endif
         enddo
 
+      else
+        DONE = .true.
       endif
 
     enddo
