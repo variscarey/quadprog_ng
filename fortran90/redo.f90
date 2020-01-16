@@ -90,6 +90,7 @@ contains
     deallocate(work)
   end subroutine
 
+
   subroutine get_qr(nrow, ncol, in_mat_A, mat_Q, mat_R)
     implicit none
     integer, intent(in) :: nrow, ncol
@@ -104,21 +105,18 @@ contains
     allocate(temp(1))
     temp = 0
 
-    print *, "doing allocations"
 
     if (.not. allocated(mat_Q)) then
       allocate(mat_Q(nrow, nrow))
       mat_Q = 0
     endif
 
-    print *, "allocated q"
 
     if (.not. allocated(mat_R)) then
       allocate(mat_R(nrow, ncol))
       mat_R = 0
     endif
 
-    print *, "allocated r"
 
     mat_R = 0
     mat_R(1:nrow, 1:ncol) = in_mat_A(1:nrow, 1:ncol)
@@ -129,18 +127,13 @@ contains
     lwork = int(temp(1))
     allocate(work(lwork))
 
-    print *, "starting R"
-
     !! Form R
     call dgeqrf(nrow, ncol, mat_R, nrow, tau, work, lwork, ierr)
-
-    print *, "doing temp move"
 
     allocate(temp_R(nrow, max(nrow, ncol)))
     temp_R = 0
     temp_R(1:nrow,1:ncol) = mat_R(1:nrow, 1:ncol)
 
-    print *, "start Q"
 
     !! Get Q back from it
     call dorgqr(nrow, nrow, nrow, temp_R, nrow, tau, work, lwork, ierr)
@@ -148,7 +141,6 @@ contains
     mat_Q = 0
     mat_Q(1:nrow, 1:ncol) = temp_R(1:nrow, 1:nrow)
 
-    print *, "done Q"
 
     !! zero out bad entries to make R upper triangular
     do icol=1,ncol
@@ -163,7 +155,7 @@ contains
     deallocate(work)
     deallocate(tau)
     deallocate(temp)
-  end subroutine
+  end subroutine 
 
 
   subroutine solve_qp(quadr_coeff_G, linear_coeff_a, &
@@ -209,7 +201,7 @@ contains
     real(8), allocatable :: G_inv(:,:)
     real(8), allocatable :: L_chol(:,:), L_inv(:,:)
 
-    real(8), allocatable :: matB(:,:), matJ(:,:), matQ(:,:), matR(:,:)
+    real(8), allocatable :: matB(:,:), matJ(:,:), matQ(:,:), matR(:,:), Rinv(:,:)
 
     real(8), allocatable :: z_step(:), r_step(:)
 
@@ -236,24 +228,33 @@ contains
     allocate(lagr(n_ineq))
 
     allocate(z_step(nvars))
+    z_step = 0
     allocate(r_step(n_ineq))
+    r_step = 0
 
     allocate(matQ(nvars, nvars))
+    matQ = 0
     allocate(matJ(nvars, nvars))
+    matJ = 0
 
     allocate(matB(nvars, n_ineq))    
+    matB = 0
     allocate(matR(nvars, n_ineq))
+    matR = 0
     allocate(Rinv(nvars, n_ineq))
+    Rinv = 0
 
     allocate(active_set(n_ineq))
     active_set = 0
 
+    DONE = .false.
+
     do while (.not. DONE)
       ineq_prb = matmul(transpose(ineq_coef_C), sol) - ineq_vec_d
 
-      if (any(ineq < 0)) then 
-        do icol=1,nvars
-          if (ineq(icol) .lt. 0) then
+      if (any(ineq_prb .lt. 0)) then 
+        do icol=1,n_ineq
+          if (ineq_prb(icol) .lt. 0) then
             p = icol
             exit
           endif
@@ -279,27 +280,27 @@ contains
             z_step = matmul(G_inv, n_p)
             FIRST_PASS = .false. 
           else
-            z_step = matmul(matmul(J(:, q+1:), transpose(J(:, q+1:))), n_p)
+            z_step = matmul(matmul(matJ(:, q+1:nvars), transpose(matJ(:, q+1:nvars))), n_p)
 
             if (q .gt. 0) then
               Rinv = 0
               call get_inverse(q, matR, Rinv)
 
               r_step = 0
-              r_step(1:q) = matmul(matmul(Rinv(1:q,1:q), transpose(J(:,1:q))), n_p)
+              r_step(1:q) = matmul(matmul(Rinv(1:q,1:q), transpose(matJ(:,1:q))), n_p)
             endif
           endif
 
           !!###~~~~~~~~ Step 2(b) ~~~~~~~~###
           !! partial step length t1 - max step in dual space          
-          if ((q .eq. 0) .or. (all(r .le. 0))) then
+          if ((q .eq. 0) .or. (all(r_step .le. 0))) then
             t1 = MAX_DOUBLE
           else
             t1 = MAX_DOUBLE
             k_dropped = 0
 
             do icol=1,q
-              if ((r(icol) .gt. 0) .and. (lagr(icol) / r_step(icol) .lt. t1)) then
+              if ((r_step(icol) .gt. 0) .and. (lagr(icol) / r_step(icol) .lt. t1)) then
                 t1 = lagr(icol) / r_step(icol)
                 k_dropped = active_set(icol)
                 j_dropped = icol
@@ -308,7 +309,7 @@ contains
           endif
 
           !! full step length t2 - min step in primal space
-          if (all(z .eq. 0)) then
+          if (all(z_step .eq. 0)) then
             t2 = MAX_DOUBLE
           else
             t2 = (-1) * ineq_prb(p) / dot_product(z_step, n_p)
@@ -318,7 +319,7 @@ contains
 
           !!###~~~~~~~~ Step 2(c) ~~~~~~~~###
           if (t .eq. MAX_DOUBLE) then
-            print *, "infeasible! stop here!"
+            print *, "QP infeasible! stop here!"
             FULL_STEP = .true.
             DONE = .true. 
             ierr = 420
@@ -339,13 +340,24 @@ contains
 
             q = q - 1
 
-            !update QR
+            if (q .eq. 0) then
+              ! skip computing the QR, J
+              cycle
+            endif
 
+            !update QR and J
+            do icol=j_dropped,n_ineq-1
+              matB(:,icol) = matB(:,icol+1)
+            enddo
+
+            call get_qr(nvars, q, matB, matQ, matR)
+
+            matJ = matmul(transpose(L_inv), matQ)
 
             cycle
           endif
 
-          sol = sol + (t * z)
+          sol = sol + (t * z_step)
           
           r_step = (-1) * r_step
           r_step(q+1) = 1
@@ -361,8 +373,12 @@ contains
             u = 0
             u(1:q) = lagr(1:q)
 
-            ! update QR
-            B(:,q) = matmul(L_inv, n_p)
+            ! update QR and J
+            matB(:,q) = matmul(L_inv, n_p)
+
+            call get_qr(nvars, q, matB, matQ, matR)
+
+            matJ = matmul(transpose(L_inv), matQ)
 
             FULL_STEP = .true. 
             exit
@@ -377,7 +393,19 @@ contains
 
             q = q - 1
 
-            ! update QR
+            if (q .eq. 0) then
+              ! skip QR update
+              cycle
+            endif
+
+            ! update QR and J
+            do icol=j_dropped,n_ineq-1
+              matB(:,icol) = matB(:,icol+1)
+            enddo
+
+            call get_qr(nvars, q, matB, matQ, matR)
+
+            matJ = matmul(transpose(L_inv), matQ)
 
             cycle
           endif
@@ -413,7 +441,11 @@ program test
 
   lin_vec = (/6, 0/)
 
-  C = transpose(reshape((/1, 0, 1, 0, 1, 1/),(/3,2/)))
+  allocate(C(2,3))
+
+  C(1,:) = (/1, 0, 1/)
+  C(2,:) = (/0, 1, 1/)
+
 
   d = (/0, 0, 2/)
 
