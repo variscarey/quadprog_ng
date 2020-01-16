@@ -1,11 +1,11 @@
-module quadprog_ng
+module quadprog_ng_redo
   implicit none
 contains
   subroutine do_cholesky_and_inverse(rank_A, in_mat_A, out_mat_L, out_mat_Inv)
     implicit none
     integer, intent(in) :: rank_A
     real(8), allocatable, intent(in) :: in_mat_A(:,:)
-    real(8), allocatable, intent(out) :: out_mat_L(:,:), out_mat_Inv(:,:)
+    real(8), allocatable, intent(inout) :: out_mat_L(:,:), out_mat_Inv(:,:)
 
     integer :: irow, icol = 0
     real(8), allocatable :: mat_U(:,:)
@@ -62,7 +62,7 @@ contains
     implicit none
     integer, intent(in) :: rank_A
     real(8), allocatable, intent(in) :: in_mat_A(:,:)
-    real(8), allocatable, intent(out) :: out_mat_A_Inv(:,:)
+    real(8), allocatable, intent(inout) :: out_mat_A_Inv(:,:)
 
     integer, allocatable :: ipiv(:)
     real(8), allocatable :: work(:)
@@ -76,11 +76,12 @@ contains
       allocate(out_mat_A_Inv(rank_A, rank_A))
     endif
 
-    out_mat_A_Inv = in_mat_A
+    out_mat_A_Inv = 0
+    out_mat_A_Inv(1:rank_A, 1:rank_A) = in_mat_A(1:rank_A, 1:rank_A)
 
     call dgetrf(rank_A, rank_A, out_mat_A_Inv, rank_A, ipiv, ierr)
 
-    lwork = ceiling(1.5 * rank_A)
+    lwork = 32 * rank_A
     allocate(work(lwork))
 
     call dgetri(rank_A, out_mat_A_Inv, rank_A, ipiv, work, lwork, ierr)
@@ -89,11 +90,12 @@ contains
     deallocate(work)
   end subroutine
 
+
   subroutine get_qr(nrow, ncol, in_mat_A, mat_Q, mat_R)
     implicit none
     integer, intent(in) :: nrow, ncol
     real(8), allocatable, intent(in) :: in_mat_A(:,:)
-    real(8), allocatable, intent(out) :: mat_Q(:,:), mat_R(:,:)
+    real(8), allocatable, intent(inout) :: mat_Q(:,:), mat_R(:,:)
 
     real(8), allocatable :: work(:), tau(:), temp(:), temp_R(:,:)
     integer :: lwork, ierr, irow, icol
@@ -103,23 +105,21 @@ contains
     allocate(temp(1))
     temp = 0
 
-    print *, "doing allocations"
 
     if (.not. allocated(mat_Q)) then
       allocate(mat_Q(nrow, nrow))
       mat_Q = 0
     endif
 
-    print *, "allocated q"
 
     if (.not. allocated(mat_R)) then
       allocate(mat_R(nrow, ncol))
       mat_R = 0
     endif
 
-    print *, "allocated r"
 
-    mat_R = in_mat_A
+    mat_R = 0
+    mat_R(1:nrow, 1:ncol) = in_mat_A(1:nrow, 1:ncol)
 
     !! Do a dummy call to find optimal lwork value
     call dgeqrf(nrow, ncol, mat_R, nrow, tau, temp, -1, ierr)
@@ -127,25 +127,20 @@ contains
     lwork = int(temp(1))
     allocate(work(lwork))
 
-    print *, "starting R"
-
     !! Form R
     call dgeqrf(nrow, ncol, mat_R, nrow, tau, work, lwork, ierr)
-
-    print *, "doing temp move"
 
     allocate(temp_R(nrow, max(nrow, ncol)))
     temp_R = 0
     temp_R(1:nrow,1:ncol) = mat_R(1:nrow, 1:ncol)
 
-    print *, "start Q"
 
     !! Get Q back from it
     call dorgqr(nrow, nrow, nrow, temp_R, nrow, tau, work, lwork, ierr)
 
-    mat_Q = temp_R(1:nrow, 1:nrow)
+    mat_Q = 0
+    mat_Q(1:nrow, 1:ncol) = temp_R(1:nrow, 1:nrow)
 
-    print *, "done Q"
 
     !! zero out bad entries to make R upper triangular
     do icol=1,ncol
@@ -160,7 +155,7 @@ contains
     deallocate(work)
     deallocate(tau)
     deallocate(temp)
-  end subroutine
+  end subroutine 
 
 
   subroutine solve_qp(quadr_coeff_G, linear_coeff_a, &
@@ -175,7 +170,6 @@ contains
     !! 
 
     ! quadratic coefficient matrix G in 
-    ! 
     real(8), allocatable, intent(in) :: quadr_coeff_G(:,:)
     real(8), allocatable, intent(in) :: linear_coeff_a(:)
     
@@ -188,125 +182,96 @@ contains
     real(8), allocatable, intent(in) :: eq_vec_b(:)
 
     integer, intent(in) :: nvars
+    integer, intent(inout) :: ierr
 
     ! the solution iterate
     real(8), allocatable, intent(inout) :: sol(:)
 
-    ! If ierr is set to anything except for zero, a problem happened
-    integer, intent(inout) :: ierr 
-    integer :: info
+    !!~~~~~~~~~~ Internals ~~~~~~~~~~!!
+    logical :: DONE, FULL_STEP = .false.
+    logical :: FIRST_PASS = .true. 
+    logical :: ADDING_EQ_CONSTRAINTS = .false. 
 
-    !!
-    !! Internals
-    !!
-    logical :: DONE = .false.
-    logical :: FULL_STEP = .false. 
-    logical :: ADDING_EQ_CONSTRAINTS = .false.
+    integer :: irow, icol
+    integer :: p,q = 0
 
-    logical :: first_pass = .true. 
-
-    integer :: status = 0
-    integer :: irow, icol, iactive_set, icopy_idx = 1
+    real(8), allocatable :: ineq_prb(:), eq_prb(:)
+    real(8), allocatable :: n_p(:)
+    real(8), allocatable :: u(:), lagr(:)
 
     real(8), allocatable :: G_inv(:,:)
+    real(8), allocatable :: L_chol(:,:), L_inv(:,:)
 
-    real(8), allocatable :: ineq_prb(:)
-    real(8), allocatable :: eq_prb(:)
-
-    !! Cholesky decomp of quadr_coeff_G
-    real(8), allocatable :: chol_L(:,:)
-    real(8), allocatable :: inv_chol_L(:,:)
-
-    !! QR factorization of B = L^{-1} N
-    real(8), allocatable :: Q_mat(:,:)
-    real(8), allocatable :: R(:,:)
-    real(8), allocatable :: R_inv(:,:)
-
-    real(8), allocatable :: J(:,:)
-    real(8), allocatable :: B(:,:)
-
-    integer, allocatable :: active_set(:)
-    integer, allocatable :: n_p(:)
-    integer, allocatable :: copy_integer(:)
-    integer :: p, q = 0 
-
-    !! lagrangian, each step in dual space
-    real(8), allocatable :: u(:)
-    !! lagrangian for each constraint in the active set
-    real(8), allocatable :: lagr(:)
-
-    integer :: k_dropped, j_dropped, k = 0
+    real(8), allocatable :: matB(:,:), matJ(:,:), matQ(:,:), matR(:,:), Rinv(:,:)
 
     real(8), allocatable :: z_step(:), r_step(:)
 
-    real(8) :: t1, t2, t
-    real(8) :: MAX_DOUBLE = huge(t1)
+    real(8) :: t, t1, t2
+    real(8) :: MAX_DOUBLE = huge(t)
 
+    integer :: k, k_dropped, j_dropped
+    integer, allocatable :: active_set(:)
 
-    !!~~~ Allocations & Initializations ~~~!!
-    if (m_eq .eq. 0) then
-      ADDING_EQ_CONSTRAINTS = .false.
-    else
-      ADDING_EQ_CONSTRAINTS = .true. 
-    endif
+    !!~~~~~~~~ Allocations ~~~~~~~~!!
+    allocate(L_chol(nvars,nvars))
+    allocate(L_inv(nvars,nvars))
+    allocate(G_inv(nvars,nvars))
+    
+    call do_cholesky_and_inverse(nvars, quadr_coeff_G, L_chol, G_inv)
+    call get_inverse(nvars, L_chol, L_inv)
 
-    if (.not. (allocated(sol))) then
-      allocate(sol(nvars))
-    endif
-
-    !! Begin chol factorization and use the factors to get
-    !! the inverse of the matrix G
-
-    allocate(chol_L(nvars, nvars))
-    allocate(inv_chol_L(nvars, nvars))
-
-    call do_cholesky_and_inverse(nvars, quadr_coeff_G, chol_L, G_inv)
-
-    call get_inverse(nvars, chol_L, inv_chol_L)
-
-    !! Allocate the other internals
-    allocate(n_p(nvars))
-    allocate(active_set(m_eq + n_ineq))  
-    allocate(lagr(m_eq + n_ineq))
-    allocate(u(m_eq + n_ineq))
-
-    allocate(z_step(nvars))
-    allocate(r_step(m_eq + n_ineq))
-
-    allocate(copy_integer(m_eq + n_ineq))
-    copy_integer = 0
-
-    allocate(Q_mat(nvars,nvars))
-    allocate(R(m_eq + n_ineq, m_eq + n_ineq))
-    allocate(R_inv(m_eq + n_ineq, m_eq + n_ineq))
-
-    allocate(J(nvars,nvars))
-    J = 0
-
-    allocate(B(nvars, m_eq + n_ineq))
-    B = 0
-
-    !!~~~ Begin Processing ~~~!!
-    !! Solution iterate
-    !! Start soln iterate at unconstrained minimum
     sol = (-1) * matmul(G_inv, linear_coeff_a)
 
-    !! Main loop
-    !! ###~~~~~~~~ Step 1 ~~~~~~~~###
+    allocate(ineq_prb(nvars))
+    allocate(n_p(nvars))
+
+    allocate(u(n_ineq + m_eq))
+    allocate(lagr(n_ineq + m_eq))
+
+    allocate(z_step(nvars))
+    z_step = 0
+    allocate(r_step(n_ineq + m_eq))
+    r_step = 0
+
+    allocate(matQ(nvars, nvars))
+    matQ = 0
+    allocate(matJ(nvars, nvars))
+    matJ = 0
+
+    allocate(matB(nvars, n_ineq + m_eq))    
+    matB = 0
+    allocate(matR(nvars, n_ineq + m_eq))
+    matR = 0
+    allocate(Rinv(nvars, n_ineq + m_eq))
+    Rinv = 0
+
+    allocate(active_set(n_ineq + m_eq))
+    active_set = 0
+
+    DONE = .false.
+
+    if (m_eq .gt. 0) then
+      ADDING_EQ_CONSTRAINTS = .true.
+    endif
+
+    q = 0
+
+    FIRST_PASS = .true.
+
     do while (.not. DONE)
-      ineq_prb = matmul(transpose(ineq_coef_C),sol) - ineq_vec_d
+      ineq_prb = matmul(transpose(ineq_coef_C), sol) - ineq_vec_d
 
       if (ADDING_EQ_CONSTRAINTS) then
-        eq_prb = matmul(transpose(eq_coef_A),sol) - eq_vec_b
+        eq_prb = matmul(transpose(eq_coef_A), sol) - eq_vec_b
       endif
 
-      if (q .ge. m_eq) then
+      if (q .eq. m_eq) then
         ADDING_EQ_CONSTRAINTS = .false. 
       endif
 
-      if (any(ineq_prb < 0) .or. ADDING_EQ_CONSTRAINTS) then
+      if (any(ineq_prb .lt. 0) .or. ADDING_EQ_CONSTRAINTS) then 
         if (ADDING_EQ_CONSTRAINTS) then
-          p = q+1
+          p = m_eq - q
           n_p = eq_coef_A(:,p)
         else
           do icol=1,n_ineq
@@ -315,6 +280,7 @@ contains
               exit
             endif
           enddo
+
           n_p = ineq_coef_C(:,p)
         endif
 
@@ -325,209 +291,174 @@ contains
         lagr = 0
         lagr(1:q) = u(1:q)
 
-        FULL_STEP = .false. 
+        FULL_STEP = .false.
 
-        !!###~~~~~~~~ Step 2 ~~~~~~~~###      
-        do while (.not. FULL_STEP)
-          ineq_prb = matmul(transpose(ineq_coef_C),sol) - ineq_vec_d
-
+        do while (.not. FULL_STEP) 
+          ineq_prb = matmul(transpose(ineq_coef_C), sol) - ineq_vec_d
           if (ADDING_EQ_CONSTRAINTS) then
-            eq_prb = matmul(transpose(eq_coef_A),sol) - eq_vec_b
+            eq_prb = matmul(transpose(eq_coef_A), sol) - eq_vec_b
           endif
 
           !!###~~~~~~~~ Step 2(a) ~~~~~~~~###
           !!## Calculate step directions
-          if (first_pass) then
+          if (FIRST_PASS) then
             z_step = matmul(G_inv, n_p)
-
-            first_pass = .false.
+            FIRST_PASS = .false. 
           else
-            z_step = matmul(matmul(J(:,q+1:nvars), transpose(J(:,q+1:nvars))), n_p)
+            z_step = matmul(matmul(matJ(:, q+1:nvars), transpose(matJ(:, q+1:nvars))), n_p)
 
             if (q .gt. 0) then
-              if (allocated(R_inv)) then 
-                deallocate(R_inv)
-                allocate(R_inv(q,q))
-              endif
+              Rinv = 0
+              call get_inverse(q, matR, Rinv)
 
-              call get_inverse(q, R, R_inv)
-
-              r_step = matmul(matmul(R_inv(1:q,1:q), transpose(J(:,1:q))), n_p)
+              r_step = 0
+              r_step(1:q) = matmul(matmul(Rinv(1:q,1:q), transpose(matJ(:,1:q))), n_p)
             endif
           endif
 
           !!###~~~~~~~~ Step 2(b) ~~~~~~~~###
-          !!# partial step length t1 - max step in dual space
-          if ( ((q .eq. 0) .or. all(r_step .le. 0)) .or. ADDING_EQ_CONSTRAINTS) then
-            t1 = MAX_DOUBLE 
+          !! partial step length t1 - max step in dual space          
+          if ((q .eq. 0) .or. (all(r_step .le. 0)) .or. ADDING_EQ_CONSTRAINTS) then
+            t1 = MAX_DOUBLE
           else
             t1 = MAX_DOUBLE
             k_dropped = 0
 
-            do iactive_set=m_eq, q
-              k = active_set(iactive_set)
-              if ((r_step(iactive_set) .gt. 0) .and. ((lagr(iactive_set) / r_step(iactive_set)) .lt. t1)) then
-                t1 = lagr(iactive_set) / r_step(iactive_set)
-                k_dropped = k
-                j_dropped = iactive_set + m_eq
+            do icol=m_eq+1,q
+              if ((r_step(icol) .gt. 0) .and. (lagr(icol) / r_step(icol) .lt. t1)) then
+                t1 = lagr(icol) / r_step(icol)
+                k_dropped = active_set(icol)
+                j_dropped = icol
               endif
             enddo
           endif
 
-          !!# full step length t2 - min step in primal space
+          !! full step length t2 - min step in primal space
           if (all(z_step .eq. 0)) then
             t2 = MAX_DOUBLE
           else
             if (ADDING_EQ_CONSTRAINTS) then
-              t2 = (-1) * eq_prb(p) / (dot_product(z_step, n_p))
+              t2 = (-1) * eq_prb(p) / dot_product(z_step, n_p)
             else
-              t2 = (-1) * ineq_prb(p) / ((dot_product(z_step, n_p)))
+              t2 = (-1) * ineq_prb(p) / dot_product(z_step, n_p)
             endif
           endif
 
-          !!# current step length
           t = min(t1, t2)
 
           !!###~~~~~~~~ Step 2(c) ~~~~~~~~###
-          if(t .eq. MAX_DOUBLE) then
-            print *, "infeasible! Stop here!"
+          if (t .eq. MAX_DOUBLE) then
+            print *, "QP infeasible! stop here!"
             FULL_STEP = .true.
-            DONE = .true.
+            DONE = .true. 
             ierr = 420
             return
           endif
 
-          !!# If t2 is infinite, then a full step in primal space infeasible
+          !! If t2 infinite, then a full step is infeasible
           if (t2 .eq. MAX_DOUBLE) then
-            print *, "t2 inf - no full step"
-            !update lagrangian
-            r_step(q+1) = -1
-            lagr = lagr + (-1 * t * r_step)
+            !update lagr
+            r_step = (-1) * r_step
+            r_step(q+1) = 1
+            lagr = lagr + (t * r_step)
 
-            !! remove dropped constraint
-            active_set(j_dropped) = 0
-            icopy_idx = 1
-            copy_integer = 0
-            do iactive_set=1,q
-              if (active_set(iactive_set) .gt. 0) then
-                copy_integer(icopy_idx) = active_set(iactive_set)
-                icopy_idx = icopy_idx + 1
-              endif
+            !update active_set
+            do icol=j_dropped,n_ineq-1
+              active_set(icol) = active_set(icol+1)
             enddo
-            active_set = copy_integer
 
-            !TODO:> ADD QR UPDATE
             q = q - 1
-            B(:,j_dropped) = 0
-            B(:,j_dropped:q) = B(:,j_dropped+1:q+1)
 
-            deallocate(Q_mat)
-            deallocate(R)
-            deallocate(R_inv)
+            if (q .eq. 0) then
+              ! skip computing the QR, J
+              cycle
+            endif
 
-            call get_qr(nvars, q, B, Q_mat, R)
+            !update QR and J
+            do icol=j_dropped,n_ineq-1
+              matB(:,icol) = matB(:,icol+1)
+            enddo
 
-            J = 0
-            J = matmul(transpose(inv_chol_L), Q_mat)
+            call get_qr(nvars, q, matB, matQ, matR)
 
-            !# go back to step 2(a)
+            matJ = matmul(transpose(L_inv), matQ)
+
             cycle
           endif
 
-          sol = sol + t * z_step
-          r_step(q+1) = -1
-          lagr = lagr + (-1 * t * r_step)
+          sol = sol + (t * z_step)
+          
+          r_step = (-1) * r_step
+          r_step(q+1) = 1
+          lagr = lagr + (t * r_step)
 
-          !!# if we took a full step
+          !! took a step in primal space
           if (t .eq. t2) then
-            print *, "full step t == t2"
+            ! update active set
+            active_set(q+1) = p
+            q = q + 1
 
-            q = q+1
-            active_set(q) = p
-
+            ! update lagr
             u = 0
             u(1:q) = lagr(1:q)
 
-            !TODO:> ADD QR_UPDATE
-            if (ADDING_EQ_CONSTRAINTS) then
-              B(:,q) = matmul(inv_chol_L, eq_coef_A(:,p))
-            else
-              B(:,q) = matmul(inv_chol_L, ineq_coef_C(:,p))
-            endif
+            ! update QR and J
+            matB(:,q) = matmul(L_inv, n_p)
 
-            deallocate(Q_mat)
-            deallocate(R)
-            deallocate(R_inv)
+            call get_qr(nvars, q, matB, matQ, matR)
 
-            call get_qr(nvars, q, B, Q_mat, R)
+            matJ = matmul(transpose(L_inv), matQ)
 
-            J = 0
-            J = matmul(transpose(inv_chol_L), Q_mat)
-
-            FULL_STEP = .true.
+            FULL_STEP = .true. 
             exit
           endif
 
+          !! took a step in dual space
           if (t .eq. t1) then
-            !! remove dropped constraint
-            print *, "partial step t == t1"
-
-            active_set(j_dropped) = 0
-            icopy_idx = 1
-            copy_integer = 0
-            do iactive_set=1,q+1
-              if (active_set(iactive_set) .gt. 0) then
-                copy_integer(icopy_idx) = active_set(iactive_set)
-                icopy_idx = icopy_idx + 1
-              endif
+            !update active_set
+            do icol=j_dropped,n_ineq-1
+              active_set(icol) = active_set(icol+1)
             enddo
-            active_set = 0
-            active_set = copy_integer
 
-            !TODO:> ADD QR UPDATE
             q = q - 1
-            B(:,j_dropped) = 0
-            B(:,j_dropped:q) = B(:,j_dropped+1:q+1)
 
-            deallocate(Q_mat)
-            deallocate(R)
-            deallocate(R_inv)
+            if (q .eq. 0) then
+              ! skip QR update
+              cycle
+            endif
 
-            call get_qr(nvars, q, B, Q_mat, R)
+            ! update QR and J
+            do icol=j_dropped,n_ineq-1
+              matB(:,icol) = matB(:,icol+1)
+            enddo
 
-            J = 0
-            J = matmul(transpose(inv_chol_L), Q_mat)
+            call get_qr(nvars, q, matB, matQ, matR)
+
+            matJ = matmul(transpose(L_inv), matQ)
 
             cycle
           endif
-
         enddo
+
       else
         DONE = .true.
       endif
-    enddo 
 
+    enddo
+
+    deallocate(L_chol)
+    deallocate(L_inv)
+    deallocate(G_inv)
+
+    deallocate(ineq_prb)
     deallocate(n_p)
-    deallocate(active_set)  
-    deallocate(lagr)
-    deallocate(u)
-    deallocate(z_step)
-    deallocate(r_step)
-    deallocate(copy_integer)
-    deallocate(Q_mat)
-    deallocate(R)
-    deallocate(R_inv)
-    deallocate(J)
-    deallocate(B)
-
-    return
 
   end subroutine solve_qp
 end module
 
 
 program test
-  use quadprog_ng
+  use quadprog_ng_redo
   implicit none
   real(8), allocatable :: G(:,:), lin_vec(:), C(:,:), d(:), A(:,:), b(:), sol(:)
   integer :: irow, icol
@@ -539,7 +470,12 @@ program test
 
   lin_vec = (/6, 0/)
 
-  C = transpose(reshape((/1, 0, 1, 0, 1, 1/),(/3,2/)))
+  print *, "Running Test 00 :: https://tinyurl.com/ux8x4dv"
+
+  allocate(C(2,3))
+
+  C(1,:) = (/1, 0, 1/)
+  C(2,:) = (/0, 1, 1/)
 
   d = (/0, 0, 2/)
 
@@ -554,11 +490,38 @@ program test
 
   allocate(sol(2))
 
+
+
   call solve_qp(G, lin_vec, &
                       n_ineq, C, d, &
                       m_eq, A, b, &
                       2, sol, ierr)
 
   print *, sol
+
+  deallocate(C)
+
+  print *, "Running Test 01 :: https://tinyurl.com/soytugm"
+
+  allocate(C(2,2))
+  C(1,:) = (/1, 0/)
+  C(2,:) = (/0, 1/)
+
+  d = (/1, 0/)
+
+  A = reshape((/1,1/), (/2, 1/))
+
+  b = (/6/)
+
+  m_eq = 1
+  n_ineq = 2
+
+  call solve_qp(G, lin_vec, &
+                n_ineq, C, d, &
+                m_eq, A, b, &
+                2, sol, ierr)
+
+  print *, sol
+
 
 end program test
