@@ -199,6 +199,11 @@ contains
     logical :: FIRST_PASS = .true. 
 
     integer :: irow, icol
+    integer :: p,q = 0
+
+    real(8), allocatable :: ineq_prb(:)
+    real(8), allocatable :: n_p(:)
+    real(8), allocatable :: u(:), lagr(:)
 
     real(8), allocatable :: G_inv(:,:)
     real(8), allocatable :: L_chol(:,:), L_inv(:,:)
@@ -216,8 +221,44 @@ contains
 
     sol = (-1) * matmul(G_inv, linear_coeff_a)
 
+    allocate(ineq_prb(nvars))
+    allocate(n_p(nvars))
+
+    allocate(u(n_ineq))
+    allocate(lagr(n_ineq))
+
+    do while (.not. DONE)
+      ineq_prb = matmul(transpose(ineq_coef_C), sol) - ineq_vec_d
+
+      if (any(ineq < 0)) then 
+        do icol=1,nvars
+          if (ineq(icol) .lt. 0) then
+            p = icol
+            exit
+          endif
+        enddo
+
+        n_p = ineq_coef_C(:,p)
+
+        if (q .eq. 0) then
+          u = 0
+        endif
+
+        lagr = 0
+        lagr(1:q) = u(1:q)
+
+        FULL_STEP = .false.
+
+      endif
+
+    enddo
+
     deallocate(L_chol)
+    deallocate(L_inv)
     deallocate(G_inv)
+
+    deallocate(ineq_prb)
+    deallocate(n_p)
 
   end subroutine solve_qp
 end module
