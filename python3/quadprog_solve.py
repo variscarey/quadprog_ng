@@ -72,16 +72,34 @@ def quadprog_solve(quadr_coeff_G, linear_coeff_a,
                 p = len(active_set)
                 n_p = eq_coef_A[:,p]
             else:
-                # Choose a violated constraint not in active set.
-                #  This is the most naive way, can be improved. 
-                violated_constraints = np.ravel(np.where(ineq < 0))
-                v = [x for x in violated_constraints if x not in active_set]
+                ## Choose a violated constraint not in active set.
+                ##  This is the most naive way, can be improved. 
+                #violated_constraints = np.ravel(np.where(ineq < 0))
+                #v = [x for x in violated_constraints if x not in active_set]
+                ## Pick the first violated constraint.
+                #p = v[0]
+                ## normal vector for each constraint, vector normal to the plane.
+                #n_p = ineq_coef_C[:,p]
 
-                # Pick the first violated constraint.
-                p = v[0]
+                ## Instead, just loop through inequality constraints
+                for blah in range(0,n_ineq):
+                    if ineq[blah] < 0:
+                        p = blah
 
-                # normal vector for each constraint, vector normal to the plane.
+                        burn_flag = False
+
+                        for jack in range(m_eq+1, q):
+                            if active_set[jack] == p:
+                                burn_flag = True
+                                break
+
+                        if burn_flag:
+                            continue
+                        else:
+                            break
+
                 n_p = ineq_coef_C[:,p]
+
 
             if q == 0:
                 u = 0
@@ -114,7 +132,7 @@ def quadprog_solve(quadr_coeff_G, linear_coeff_a,
 
                 ###~~~~~~~~ Step 2(b) ~~~~~~~~###
                 # partial step length t1 - max step in dual space
-                if ((q == 0) or (r <= 0) or ADDING_EQ_CONSTRAINTS):
+                if ((q == 0) or (np.any(r <= 0)) or ADDING_EQ_CONSTRAINTS):
                     t1 = np.inf
                 else:
                     t1 = np.inf
@@ -125,7 +143,7 @@ def quadprog_solve(quadr_coeff_G, linear_coeff_a,
                         if (r[j] > 0) and (lagr[j] / r[j]) < t1:
                             t1 = lagr[j]/r[j]
                             k_dropped = k
-                            j_dropped = j + m_eq
+                            j_dropped = j
 
                     t1 = np.ravel(t1)[0]
 
@@ -171,9 +189,6 @@ def quadprog_solve(quadr_coeff_G, linear_coeff_a,
                     J1 = Linv.T * Q[:,[x for x in range(0, q)]]
                     J2 = Linv.T * Q[:,[x for x in range(q, Q.shape[1])]]
 
-                    print("Q shape:", np.shape(Q))
-                    print("R shape:", np.shape(R))
-
                     # go back to step 2(a)
                     continue
 
@@ -199,10 +214,6 @@ def quadprog_solve(quadr_coeff_G, linear_coeff_a,
                         J1 = Linv.T * Q[:,[x for x in range(0, q)]]
                         J2 = Linv.T * Q[:,[x for x in range(q, Q.shape[1])]]
 
-                    print("Q shape:", np.shape(Q))
-                    print("R shape:", np.shape(R))
-
-
                     # Exit current loop for Step 2, go back to Step 1
                     FULL_STEP = True
                     break
@@ -217,10 +228,6 @@ def quadprog_solve(quadr_coeff_G, linear_coeff_a,
                     Q,R = qr_delete(Q, R, j_dropped, 1, 'col')
                     J1 = Linv.T * Q[:,[x for x in range(0, q)]]
                     J2 = Linv.T * Q[:,[x for x in range(q, Q.shape[1])]]
-
-                    print("Q shape:", np.shape(Q))
-                    print("R shape:", np.shape(R))
-
 
                     # Go back to step 2(a)
                     continue
@@ -289,3 +296,37 @@ if __name__ == "__main__":
         print("Test 01 successful!")
     else:
         print("test failed... whoops.")
+
+
+    ## Test 02
+    #### 
+    print("Running Test 02 :: ")
+    G = np.matrix([[2.23925438, 1.98050098, 1.20684995, 1.45356727],
+                   [1.98050098, 2.04344635, 1.3549836 , 1.14860336],
+                   [1.20684995, 1.3549836 , 1.03128759, 0.55623149],
+                   [1.45356727, 1.14860336, 0.55623149, 1.12394901]])
+    a = np.matrix([[2], [3], [0.002], [5]])
+
+    C = np.matrix([[1, 0, 1, 1],
+                   [0, 3, 0, 2],
+                   [0, 4, 9, 0],
+                   [7, 0, 1, 5]])
+
+    d = np.matrix([[5],
+                   [2],
+                   [0.1],
+                   [7]])
+
+    A = np.matrix([[2, 0.5],
+                   [0.1, 0],
+                   [6, 0],
+                   [3.5, 3.5]])
+
+    b = np.matrix([[10], [7]])
+
+    m_eq = 2
+    n_ineq = 4
+
+    est = quadprog_solve(G, a, n_ineq, C, d, m_eq, A, b)
+    print(est)
+    
