@@ -277,7 +277,14 @@ contains
           do icol=1,n_ineq
             if (ineq_prb(icol) .lt. 0) then
               p = icol
-              exit
+
+              !! make sure it's not already in the active set
+              do irow=meq+1,q
+                if (active_set(irow) .eq. p) then
+                  cycle
+                else
+                  exit
+                endif
             endif
           enddo
 
