@@ -191,6 +191,7 @@ contains
     logical :: DONE, FULL_STEP = .false.
     logical :: FIRST_PASS = .true. 
     logical :: ADDING_EQ_CONSTRAINTS = .false. 
+    logical :: BURN_FLAG = .false. 
 
     integer :: irow, icol
     integer :: p,q = 0
@@ -278,13 +279,20 @@ contains
             if (ineq_prb(icol) .lt. 0) then
               p = icol
 
+              BURN_FLAG = .false. 
+
               !! make sure it's not already in the active set
-              do irow=meq+1,q
+              do irow=m_eq+1,q
                 if (active_set(irow) .eq. p) then
-                  cycle
-                else
-                  exit
+                  BURN_FLAG = .true.
                 endif
+              enddo
+
+              if (BURN_FLAG) then
+                cycle
+              else
+                exit
+              endif
             endif
           enddo
 
