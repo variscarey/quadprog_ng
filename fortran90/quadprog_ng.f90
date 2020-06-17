@@ -158,7 +158,7 @@ contains
   end subroutine 
 
 
-  subroutine solve_qp(quadr_coeff_G, linear_coeff_a, &
+  subroutine solve_qp(quadr_coeff_A, linear_coeff_a, &
                       n_ineq, ineq_coef_C, ineq_vec_d, &
                       m_eq, eq_coef_A, eq_vec_b, &
                       nvars, sol, ierr)
@@ -200,8 +200,9 @@ contains
     real(8), allocatable :: n_p(:)
     real(8), allocatable :: u(:), lagr(:)
 
-    real(8), allocatable :: G_inv(:,:)
-    real(8), allocatable :: L_chol(:,:), L_inv(:,:)
+    ! Not needed in current XGC use cases
+    !real(8), allocatable :: G_inv(:,:)
+    !real(8), allocatable :: L_chol(:,:), L_inv(:,:)
 
     real(8), allocatable :: matB(:,:), matJ(:,:), matQ(:,:), matR(:,:), Rinv(:,:)
 
@@ -214,14 +215,20 @@ contains
     integer, allocatable :: active_set(:)
 
     !!~~~~~~~~ Allocations ~~~~~~~~!!
-    allocate(L_chol(nvars,nvars))
-    allocate(L_inv(nvars,nvars))
-    allocate(G_inv(nvars,nvars))
+    !allocate(L_chol(nvars,nvars))
+    !allocate(L_inv(nvars,nvars))
+    !allocate(G_inv(nvars,nvars))
     
-    call do_cholesky_and_inverse(nvars, quadr_coeff_G, L_chol, G_inv)
-    call get_inverse(nvars, L_chol, L_inv)
+    allocate(Winv(nvars))
+    
+    ! Not needed for XGC use cases
+    !call do_cholesky_and_inverse(nvars, quadr_coeff_G, L_chol, G_inv)
+    !call get_inverse(nvars, L_chol, L_inv)
 
-    sol = (-1) * matmul(G_inv, linear_coeff_a)
+    ! We will always have equality constraints so best is start with LS solution
+    !sol = (-1) * matmul(G_inv, linear_coeff_a)
+
+    
 
     allocate(ineq_prb(nvars))
     allocate(n_p(nvars))
@@ -259,26 +266,28 @@ contains
 
     FIRST_PASS = .true.
 
+    !compute QR factorization of equality constraints(XGC optimized)
+    lwork = 2 * nvars * n_eq 
+    allocate(work(lwork))
+    call dgels('T', nvars, n_eq, 1, eq_coef_A, eq_vec_b, n_eq, work, lwork, ierr)
+    sol = eq_vec_b(1:n
+
     do while (.not. DONE)
-      ineq_prb = matmul(transpose(ineq_coef_C), sol) - ineq_vec_d
+       !feasibility check
+       ineq_prb = matmul(transpose(ineq_coef_C), sol) - ineq_vec_d
 
-      if (ADDING_EQ_CONSTRAINTS) then
-        eq_prb = matmul(transpose(eq_coef_A), sol) - eq_vec_b
-      endif
+      !if (ADDING_EQ_CONSTRAINTS) then
+      !  eq_prb = matmul(transpose(eq_coef_A), sol) - eq_vec_b
+      !endif
 
-      if (q .eq. m_eq) then
-        ADDING_EQ_CONSTRAINTS = .false. 
-      endif
+      !if (q .eq. m_eq) then
+      !  ADDING_EQ_CONSTRAINTS = .false. 
+      !endif
 
-      if (any(ineq_prb .lt. 0) .or. ADDING_EQ_CONSTRAINTS) then 
-        if (ADDING_EQ_CONSTRAINTS) then
-          p = m_eq - q
-          n_p = eq_coef_A(:,p)
-        else
-          do icol=1,n_ineq
+      if any(ineq_prb .lt. 0)          !.or. ADDING_EQ_CONSTRAINTS) then 
+         do icol=1,n_ineq
             if (ineq_prb(icol) .lt. 0) then
-              p = icol
-
+               p = icol
               BURN_FLAG = .false. 
 
               !! make sure it's not already in the active set
@@ -300,9 +309,10 @@ contains
           n_p = ineq_coef_C(:,p)
         endif
 
-        if (q .eq. 0) then
-          u = 0
-        endif
+        !q will not be zero as we have inequality constraints.
+        !if (q .eq. 0) then
+        !  u = 0
+        !endif
 
         lagr = 0
         lagr(1:q) = u(1:q)
